@@ -77,6 +77,12 @@ void NPCCircleWidget::setGameRunning(bool running)
     update();
 }
 
+void NPCCircleWidget::setHideLabelsPct(int pct)
+{
+    m_hideLabelsPct = pct;
+    update();
+}
+
 void NPCCircleWidget::highlightNPC(int npcId)
 {
     m_highlightId = npcId;
@@ -190,8 +196,21 @@ void NPCCircleWidget::drawNPCs(QPainter& p)
         p.setPen(Qt::NoPen);
         p.setBrush(npc.color);
         p.drawEllipse(QPointF(npc.x, npc.y), nodeRadius, nodeRadius);
+    }
 
-        // 名字标签（节点外侧辐射方向）
+    // 玩家对战：绘制从圆心到当前对手的连线
+    if (m_gameRunning && m_currentOpponentId >= 0) {
+        for (auto& npc : m_npcs) {
+            if (npc.id == m_currentOpponentId) {
+                p.setPen(QPen(QColor("#FF6D00"), 2.0, Qt::DashLine));
+                p.drawLine(QPointF(m_centerX, m_centerY), QPointF(npc.x, npc.y));
+                break;
+            }
+        }
+    }
+
+    // 名字标签
+    for (auto& npc : m_npcs) {
         double dx = npc.x - m_centerX;
         double dy = npc.y - m_centerY;
         double dist = std::sqrt(dx * dx + dy * dy);
@@ -203,7 +222,10 @@ void NPCCircleWidget::drawNPCs(QPainter& p)
         QFont f("", 8);
         p.setFont(f);
         p.setPen(QColor("#555555"));
-        QString label = QString("%1  %2").arg(npc.name).arg(npc.score);
+        // 随机匿名：按比例隐藏类型标签
+        bool hidden = (m_hideLabelsPct > 0) && ((static_cast<uint>(npc.id * 2654435761U) % 100) < static_cast<uint>(m_hideLabelsPct));
+        QString displayName = hidden ? QStringLiteral("?") : (npc.name.left(1) + QString::number(npc.id));
+        QString label = QString("%1 %2").arg(displayName).arg(npc.score);
         QRectF labelRect(labelX - 40, labelY - 9, 80, 18);
         p.drawText(labelRect, Qt::AlignCenter, label);
     }
@@ -226,7 +248,7 @@ void NPCCircleWidget::drawCenterButtons(QPainter& p)
 
     p.setPen(Qt::white);
     p.setFont(btnFont);
-    p.drawText(m_btnStartRect, Qt::AlignCenter, m_gameRunning ? "重置" : "开始");
+    p.drawText(m_btnStartRect, Qt::AlignCenter, m_gameRunning ? "重置" : "开始游戏");
 }
 
 void NPCCircleWidget::drawLegend(QPainter& p)

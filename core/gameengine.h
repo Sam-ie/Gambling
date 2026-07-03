@@ -62,11 +62,13 @@ public:
     void setTotalRounds(int rounds) { m_totalRounds = rounds; }
     void setEliminationInterval(int rounds) { m_eliminationInterval = rounds; }
     int eliminationInterval() const { return m_eliminationInterval; }
-    void setGeneticEnabled(bool enabled) { m_geneticEnabled = enabled; }
-    bool geneticEnabled() const { return m_geneticEnabled; }
+    void setInheritHistory(bool enabled) { m_inheritHistory = enabled; }
+    bool inheritHistory() const { return m_inheritHistory; }
     void setAutoEvolutionSpeed(int ms) { m_autoEvoInterval = ms; }
     void setErrorRate(double rate) { m_errorRate = rate; }
     double errorRate() const { return m_errorRate; }
+    void setScoreInheritRatio(int pct) { m_scoreInheritRatio = pct / 100.0; }
+    int scoreInheritRatio() const { return static_cast<int>(m_scoreInheritRatio * 100); }
 
     // ---- 积分规则配置 ----
     void setScoreRules(int cooperateReward, int cheatReward,
@@ -85,16 +87,20 @@ public:
     void setEliminationCount(int cnt) { m_eliminationCount = qBound(1, cnt, 25); }
     int eliminationCount() const { return m_eliminationCount; }
 
+    // 查询玩家与某NPC的交互历史
+    QVector<InteractionPair> getPlayerInteractionHistory(int npcId) const;
+
     void cheatAddScore(int points);
 
     // 作弊：设定指定 NPC 的分数
     void setNPCScores(const QVector<QPair<int, int>>& npcScoreUpdates);
 
-    // 自动演化控制 - 暂停/继续/单步
+    // 自动演化控制
     void pauseAutoEvolution();
     void resumeAutoEvolution();
-    void stepAutoEvolution();  // 暂停状态下执行一轮（所有 NPC 对）
-    void stepAutoEvolutionPair(); // 执行一对 NPC 交互（步进）
+    void stepAutoEvolution();     // 单轮（逐对回显，定时器驱动）
+    void stepAutoEvolutionPair(); // 步进（逐对回显，手动点击）
+    void startAutoEvolutionFast(); // 极速演化（一轮一帧）
 
     // 自动演化：纯 NPC 模拟，无玩家参与
     // 通过 QTimer 分步运行，每步发出 autoEvoStep 信号
@@ -108,8 +114,6 @@ public:
     // 单步淘汰（删除最低分，克隆最高分）
     void applyElimination();
 
-    // 遗传：按积分比例繁殖高分 NPC
-    void applyGenetics();
 
 signals:
     void gameStarted();
@@ -141,15 +145,17 @@ private:
     int m_playerScore = 0;
     int m_currentRound = 0;
     int m_totalRounds = 10;
+    int m_nextNpcId = 0;  // 全局 NPC ID 计数器，避免与玩家位冲突
     Phase m_phase = IDLE;
     int m_currentOpponentIdx = 0;
 
     // 高级设置
     int m_eliminationInterval = 2;  // 每 N 回合
     int m_eliminationCount = 1;      // 每次淘汰人数
-    bool m_geneticEnabled = false;
+    bool m_inheritHistory = true;  // 克隆是否继承历史
+    double m_scoreInheritRatio = 0.0; // 每轮后积分继承比例 0.0~1.0
     double m_errorRate = 0.0;       // 失误率 0.0~1.0
-    int m_autoEvoInterval = 200;    // 自动演化每步间隔 ms
+    int m_autoEvoInterval = 100;    // 自动演化每步间隔 ms
 
     // 可配置积分规则（标准囚徒困境：R=3, T=5, S=0, P=1）
     int m_cooperateReward = 3;      // 双方合作各得
@@ -163,6 +169,10 @@ private:
     bool m_autoEvoPaused = false;
     int m_autoEvoPairI = 0;  // 步进模式：当前交互对索引
     int m_autoEvoPairJ = 1;
+    bool m_autoEvoAdjustingRound = false;
+    bool m_autoEvoWaitingAdjust = false; // 等待折算步（延时 0.3s）
+    bool m_autoEvoFastMode = false;     // true=极速演化(一轮一帧) false=逐对演化
+    bool m_autoEvoSingleRound = false;  // 单轮模式，一轮后停止
 
     // 支付矩阵（非静态，使用成员变量）
     void calculateScores(int action1, int action2,
@@ -173,6 +183,8 @@ private:
 
     // 自动演化单步
     void autoEvoTick();
+    // 按比例折算积分
+    void adjustScores();
 };
 
 #endif // GAMEENGINE_H

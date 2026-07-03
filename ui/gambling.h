@@ -41,7 +41,7 @@ private slots:
 
     // 自动演化按钮
     void on_btnEvoStart_clicked();
-    void on_btnEvoPause_clicked();
+    void on_btnEvoFast_clicked();
     void on_btnEvoStep_clicked();
     void on_btnEvoRound_clicked();
 
@@ -49,7 +49,6 @@ private slots:
     void updateTotalPopulation();
 
     // 设置页按钮
-    void on_btnRanking_clicked();
     void on_btnCheatPanel_clicked();
 
     // GameEngine 信号处理
@@ -81,7 +80,10 @@ private:
     void setupTooltips();
     void setupSettingsConnections();
     void initAutoEvolution();
+    void setPlayerMode(bool playerMode);
     void setGameButtonsEnabled(bool enabled);
+    void updateHelpText();
+    void showPlayerHistory(int opponentId, const QString& name);
     void updateScoreDisplay();
     void updateOpponentDisplay(const QString& name, const QString& strategy);
     void appendLog(const QString& text);

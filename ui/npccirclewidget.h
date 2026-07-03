@@ -27,7 +27,8 @@ public:
     void setCurrentOpponent(int npcId);  // -1 = 无
     void setGameRunning(bool running);
     void highlightNPC(int npcId);
-    void highlightPair(int npcIdA, int npcIdB); // 高亮一对 NPC（自动演化连线）
+    void highlightPair(int npcIdA, int npcIdB);
+    void setHideLabelsPct(int pct); // 隐藏类型标签比例 0-100 // 高亮一对 NPC（自动演化连线）
 
 signals:
     void startClicked();
@@ -56,6 +57,7 @@ private:
     int m_highlightId = -1;
     int m_pairHighlightA = -1; // 自动演化：突出显示的 NPC 对
     int m_pairHighlightB = -1;
+    int m_hideLabelsPct = 0;   // 隐藏标签比例
     bool m_gameRunning = false;
 
     // 布局缓存
