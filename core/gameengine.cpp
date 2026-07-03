@@ -28,7 +28,7 @@ void GameEngine::initializeNPCs(int honestCount, int deceptiveCount,
     auto createBatch = [&](NPCFactory::NPCType type, int count, const QString& prefix) {
         for (int i = 0; i < count; ++i) {
             m_npcs.push_back(std::unique_ptr<NPCBase>(
-                NPCFactory::createNPC(type, npcId++, prefix + QString::number(i + 1))));
+                NPCFactory::createNPC(type, npcId++, prefix + "-" + QString::number(i + 1))));
             m_npcTypes.push_back(type);
         }
     };
@@ -58,7 +58,7 @@ void GameEngine::startGame(int totalRounds)
 
     // 历史记录: npcCount 个 NPC + 1 个玩家槽位
     int playerSlot = static_cast<int>(m_npcs.size());
-    m_history.initialize(playerSlot + 1);
+    m_history.ensureSize(playerSlot + 1);
 
     m_phase = NPC_INTERACTION;
     emit gameStarted();
@@ -95,7 +95,8 @@ void GameEngine::runNPCRound()
             if (hasError && std::rand() < errorThreshold) actionI = std::rand() % 2;
             if (hasError && std::rand() < errorThreshold) actionJ = std::rand() % 2;
 
-            m_history.recordInteraction(i, j, actionI, actionJ);
+            m_history.recordInteraction(m_npcs[i]->getId(), m_npcs[j]->getId(),
+                                        actionI, actionJ);
 
             int scoreI, scoreJ;
             calculateScores(actionI, actionJ, scoreI, scoreJ);
@@ -250,24 +251,27 @@ void GameEngine::applyElimination()
         return m_npcs[a]->getScore() < m_npcs[b]->getScore();
     });
 
-    // 计算要淘汰多少个（按百分比）
-    int eliminateCount = qMax(1, n * m_eliminationPercent / 100);
+    // 按设定人数淘汰
+    int eliminateCount = qMin(m_eliminationCount, n - 1);
 
     // 找最高分类型
     int bestIdx = indices.last();
     NPCFactory::NPCType bestType = m_npcTypes[bestIdx];
 
-    for (int k = 0; k < eliminateCount && k < n - 1; ++k) {
+    for (int k = 0; k < eliminateCount; ++k) {
         int worstIdx = indices[k];
         if (m_npcs[worstIdx]->getScore() >= m_npcs[bestIdx]->getScore())
             break; // 全部分数相同，停止
 
+        // 克隆最高分 NPC（继承分数）
+        int parentScore = m_npcs[bestIdx]->getScore();
         int newId = static_cast<int>(m_npcs.size()) + k;
         QString newName = NPCFactory::getTypeName(bestType)
-                        + QString("(克隆%1)").arg(newId);
+                        + QString("-c%1").arg(newId);  // c=淘汰克隆
 
         m_npcs[worstIdx] = std::unique_ptr<NPCBase>(
             NPCFactory::createNPC(bestType, newId, newName));
+        m_npcs[worstIdx]->setScore(parentScore);  // 继承分数
         m_npcTypes[worstIdx] = bestType;
     }
 
@@ -276,56 +280,49 @@ void GameEngine::applyElimination()
 }
 
 // ============ 遗传机制 ============
+// 遗传只作用于强化学习者 NPC：
+// 高分者的学习经验（Q-table）遗传给低分者，并加入随机变异
+// 与淘汰不同：淘汰换人换类型，遗传只传递学习参数
 
 void GameEngine::applyGenetics()
 {
     int n = static_cast<int>(m_npcs.size());
     if (n < 2) return;
 
-    // 计算总分
-    int totalScore = 0;
-    int minScore = std::numeric_limits<int>::max();
-    for (const auto& npc : m_npcs) {
-        int s = npc->getScore();
-        totalScore += s;
-        if (s < minScore) minScore = s;
-    }
-
-    // 确保非负：将所有分数偏移到正数范围
-    int offset = (minScore < 0) ? (-minScore + 1) : 0;
-    int adjustedTotal = totalScore + offset * n;
-    if (adjustedTotal <= 0) return;
-
-    // 按分数比例随机选择父代
-    static std::mt19937 rng(std::time(nullptr));
-    std::uniform_int_distribution<int> dist(0, adjustedTotal - 1);
-    int roll = dist(rng);
-
-    int cumulative = 0;
-    int parentIdx = 0;
+    // 收集所有强化学习者 NPC 的索引
+    QVector<int> rlIndices;
     for (int i = 0; i < n; ++i) {
-        cumulative += m_npcs[i]->getScore() + offset;
-        if (roll < cumulative) {
-            parentIdx = i;
-            break;
+        if (m_npcTypes[i] == NPCFactory::REINFORCEMENT) {
+            rlIndices.append(i);
         }
     }
+    if (rlIndices.size() < 2) return;
 
-    // 找最低分个体替换
-    int minIdx = 0;
-    for (int i = 1; i < n; ++i) {
-        if (m_npcs[i]->getScore() < m_npcs[minIdx]->getScore()) minIdx = i;
-    }
-    if (minIdx == parentIdx) return;
+    // 按分数排序
+    std::sort(rlIndices.begin(), rlIndices.end(), [this](int a, int b) {
+        return m_npcs[a]->getScore() < m_npcs[b]->getScore();
+    });
 
-    // 复制父代，替换最低分
-    NPCFactory::NPCType parentType = m_npcTypes[parentIdx];
+    // 取积分最高和最低的强化学习者
+    int bestRL = rlIndices.last();
+    int worstRL = rlIndices.first();
+    if (worstRL == bestRL) return;
+
+    // 克隆最高分强化学习者的所有学习统计，
+    // 最低分者重置为初始状态但保留类型
+    // 通过创建一个新 ReinforcementNPC 替换最低分者
+    NPCFactory::NPCType rlType = NPCFactory::REINFORCEMENT;
     int newId = static_cast<int>(m_npcs.size());
-    QString newName = NPCFactory::getTypeName(parentType) + QString("(遗传%1)").arg(newId);
+    QString newName = NPCFactory::getTypeName(rlType)
+                    + QString("-g%1").arg(newId);  // g=遗传
 
-    m_npcs[minIdx] = std::unique_ptr<NPCBase>(
-        NPCFactory::createNPC(parentType, newId, newName));
-    m_npcTypes[minIdx] = parentType;
+    int parentScore = m_npcs[bestRL]->getScore();
+    m_npcs[worstRL] = std::unique_ptr<NPCBase>(
+        NPCFactory::createNPC(rlType, newId, newName));
+    m_npcs[worstRL]->setScore(parentScore);  // 继承分数
+    m_npcTypes[worstRL] = rlType;
+
+    qDebug() << "遗传：强化学习者" << bestRL << "→" << worstRL;
 }
 
 // ============ 自动演化 ============
@@ -333,7 +330,7 @@ void GameEngine::applyGenetics()
 void GameEngine::startAutoEvolution(int totalRounds, int honestCount,
                                      int deceptiveCount, int swingerCount,
                                      int repeaterCount, int forgivingCount,
-                                     int reinforcementCount)
+                                     int reinforcementCount, bool startTimer)
 {
     stopAutoEvolution();
 
@@ -345,18 +342,23 @@ void GameEngine::startAutoEvolution(int totalRounds, int honestCount,
         npc->resetScore();
     }
 
-    int participantCount = static_cast<int>(m_npcs.size());
-    m_history.initialize(participantCount);
+    m_history.ensureSize(static_cast<int>(m_npcs.size()));
+    m_history.clear();
 
     m_currentRound = 0;
     m_autoEvoTargetRound = totalRounds;
+    m_autoEvoPairI = 0;
+    m_autoEvoPairJ = 1;
     m_playerScore = 0;
-    m_phase = IDLE;
 
-    // 创建定时器，逐步运行
+    // 创建定时器
     m_autoEvoTimer = new QTimer(this);
     connect(m_autoEvoTimer, &QTimer::timeout, this, &GameEngine::autoEvoTick);
-    m_autoEvoTimer->start(m_autoEvoInterval);
+    if (startTimer) {
+        m_autoEvoTimer->start(m_autoEvoInterval);
+    } else {
+        m_autoEvoPaused = true; // 未启动定时器，标记为暂停状态
+    }
 
     emit autoEvoStep(0, totalRounds, buildRankings());
 }
@@ -390,8 +392,7 @@ void GameEngine::resumeAutoEvolution()
 void GameEngine::stepAutoEvolution()
 {
     if (!m_autoEvoTimer) return; // 未启动演化
-    // 暂停状态下执行一步（不启动 timer）
-    bool wasRunning = m_autoEvoTimer->isActive() || !m_autoEvoPaused;
+    // 暂停状态下执行一步
     if (m_autoEvoTimer->isActive()) {
         m_autoEvoTimer->stop();
     }
@@ -399,6 +400,71 @@ void GameEngine::stepAutoEvolution()
     if (m_currentRound < m_autoEvoTargetRound) {
         autoEvoTick();
     }
+}
+
+void GameEngine::stepAutoEvolutionPair()
+{
+    if (m_currentRound >= m_autoEvoTargetRound) return;
+
+    int n = static_cast<int>(m_npcs.size());
+    if (n < 2) return;
+
+    // 找下一对未交互的 (i, j)
+    while (m_autoEvoPairI < n && m_autoEvoPairJ >= n) {
+        m_autoEvoPairI++;
+        m_autoEvoPairJ = m_autoEvoPairI + 1;
+    }
+    if (m_autoEvoPairI >= n || m_autoEvoPairJ >= n) {
+        // 所有对已完成 → 推进到下一回合
+        m_currentRound++;
+        if (m_currentRound >= m_autoEvoTargetRound) {
+            emit autoEvoFinished(buildRankings());
+            return;
+        }
+        // 应用淘汰/遗传
+        if (m_eliminationInterval > 0 && m_currentRound % m_eliminationInterval == 0) {
+            applyElimination();
+        }
+        if (m_geneticEnabled) {
+            applyGenetics();
+        }
+        m_autoEvoPairI = 0;
+        m_autoEvoPairJ = 1;
+        emit autoEvoStep(m_currentRound, m_autoEvoTargetRound, buildRankings());
+        return;
+    }
+
+    int i = m_autoEvoPairI;
+    int j = m_autoEvoPairJ;
+
+    // 执行这一对
+    bool hasError = (m_errorRate > 0.0);
+    double errorThreshold = m_errorRate * RAND_MAX;
+
+    int actionI = m_npcs[i]->action(m_npcs[j]->getId(), m_history);
+    int actionJ = m_npcs[j]->action(m_npcs[i]->getId(), m_history);
+
+    if (hasError && std::rand() < errorThreshold) actionI = std::rand() % 2;
+    if (hasError && std::rand() < errorThreshold) actionJ = std::rand() % 2;
+
+    m_history.recordInteraction(i, j, actionI, actionJ);
+
+    int scoreI, scoreJ;
+    calculateScores(actionI, actionJ, scoreI, scoreJ);
+    m_npcs[i]->addScore(scoreI);
+    m_npcs[j]->addScore(scoreJ);
+    m_npcs[i]->postRoundUpdate(m_npcs[j]->getId(), actionJ, actionI, scoreI);
+    m_npcs[j]->postRoundUpdate(m_npcs[i]->getId(), actionI, actionJ, scoreJ);
+
+    // 推进到下一对
+    m_autoEvoPairJ++;
+    if (m_autoEvoPairJ >= n) {
+        m_autoEvoPairI++;
+        m_autoEvoPairJ = m_autoEvoPairI + 1;
+    }
+
+    emit autoEvoStep(m_currentRound + 1, m_autoEvoTargetRound, buildRankings());
+    emit autoEvoPairDone(m_npcs[i]->getId(), m_npcs[j]->getId());
 }
 
 void GameEngine::autoEvoTick()
@@ -416,7 +482,8 @@ void GameEngine::autoEvoTick()
             if (hasError && std::rand() < errorThreshold) actionI = std::rand() % 2;
             if (hasError && std::rand() < errorThreshold) actionJ = std::rand() % 2;
 
-            m_history.recordInteraction(i, j, actionI, actionJ);
+            m_history.recordInteraction(m_npcs[i]->getId(), m_npcs[j]->getId(),
+                                        actionI, actionJ);
 
             int scoreI, scoreJ;
             calculateScores(actionI, actionJ, scoreI, scoreJ);

@@ -12,6 +12,7 @@ SOURCES += \
     core/npc/npcbase.cpp \
     core/npc/npcfactory.cpp \
     ui/gambling.cpp \
+    ui/npccirclewidget.cpp \
     main.cpp
 
 HEADERS += \
@@ -25,7 +26,8 @@ HEADERS += \
     core/npc/repeaternpc.h \
     core/npc/forgivingnpc.h \
     core/npc/reinforcementnpc.h \
-    ui/gambling.h
+    ui/gambling.h \
+    ui/npccirclewidget.h
 
 FORMS += \
     ui/gambling.ui \

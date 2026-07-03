@@ -12,6 +12,8 @@ class Welcome;
 }
 QT_END_NAMESPACE
 
+class NPCCircleWidget;
+
 struct PlayerStats {
     int honestCount = 0;
     int cheatCount = 0;
@@ -32,20 +34,23 @@ private slots:
     // 游戏操作按钮
     void on_btnHonest_clicked();
     void on_btnCheat_clicked();
-    void on_btnStart_clicked();
-    void on_btnReset_clicked();
 
-    // 自动演化按钮（游戏页）
+    // 圆心按钮
+    void onStartClicked();
+    void onResetClicked();
+
+    // 自动演化按钮
     void on_btnEvoStart_clicked();
     void on_btnEvoPause_clicked();
     void on_btnEvoStep_clicked();
-
-    // 设置页按钮（排名/作弊仍需点击触发）
-    void on_btnRanking_clicked();
-    void on_btnCheatPanel_clicked();
+    void on_btnEvoRound_clicked();
 
     // 人数设置
     void updateTotalPopulation();
+
+    // 设置页按钮
+    void on_btnRanking_clicked();
+    void on_btnCheatPanel_clicked();
 
     // GameEngine 信号处理
     void onGameStarted();
@@ -67,6 +72,7 @@ private:
     Ui::Gambling* ui;
     QWidget* m_welcomePage = nullptr;
     GameEngine* m_engine;
+    NPCCircleWidget* m_circleWidget = nullptr;
     int m_setRounds = 10;
     PlayerStats m_stats;
     QString m_currentOpponentStrategy;
@@ -74,6 +80,7 @@ private:
     // UI 辅助
     void setupTooltips();
     void setupSettingsConnections();
+    void initAutoEvolution();
     void setGameButtonsEnabled(bool enabled);
     void updateScoreDisplay();
     void updateOpponentDisplay(const QString& name, const QString& strategy);

@@ -81,9 +81,9 @@ public:
     int betrayedPenalty() const { return m_betrayedPenalty; }
     int bothCheatPenalty() const { return m_bothCheatPenalty; }
 
-    // ---- 淘汰比例 ----
-    void setEliminationPercent(int pct) { m_eliminationPercent = qBound(1, pct, 100); }
-    int eliminationPercent() const { return m_eliminationPercent; }
+    // ---- 淘汰人数 ----
+    void setEliminationCount(int cnt) { m_eliminationCount = qBound(1, cnt, 25); }
+    int eliminationCount() const { return m_eliminationCount; }
 
     void cheatAddScore(int points);
 
@@ -93,14 +93,17 @@ public:
     // 自动演化控制 - 暂停/继续/单步
     void pauseAutoEvolution();
     void resumeAutoEvolution();
-    void stepAutoEvolution();  // 暂停状态下执行一步
+    void stepAutoEvolution();  // 暂停状态下执行一轮（所有 NPC 对）
+    void stepAutoEvolutionPair(); // 执行一对 NPC 交互（步进）
 
     // 自动演化：纯 NPC 模拟，无玩家参与
     // 通过 QTimer 分步运行，每步发出 autoEvoStep 信号
     void startAutoEvolution(int totalRounds, int honestCount, int deceptiveCount,
                             int swingerCount, int repeaterCount,
-                            int forgivingCount, int reinforcementCount);
+                            int forgivingCount, int reinforcementCount,
+                            bool startTimer = true);
     void stopAutoEvolution();
+    bool autoEvoActive() const { return m_autoEvoTimer != nullptr; }
 
     // 单步淘汰（删除最低分，克隆最高分）
     void applyElimination();
@@ -123,7 +126,12 @@ signals:
     // 自动演化信号
     void autoEvoStep(int round, int totalRounds,
                      const QVector<NPCScoreInfo>& rankings);
+    void autoEvoPairDone(int npcIdA, int npcIdB); // 一对交互完成
     void autoEvoFinished(const QVector<NPCScoreInfo>& finalRankings);
+
+public:
+    // 构建积分排名（UI 需要）
+    QVector<NPCScoreInfo> buildRankings() const;
 
 private:
     std::vector<std::unique_ptr<NPCBase>> m_npcs;
@@ -137,29 +145,28 @@ private:
     int m_currentOpponentIdx = 0;
 
     // 高级设置
-    int m_eliminationInterval = 0;  // 0=禁用
-    int m_eliminationPercent = 100; // 淘汰比例，100=淘汰1个最低分
+    int m_eliminationInterval = 2;  // 每 N 回合
+    int m_eliminationCount = 1;      // 每次淘汰人数
     bool m_geneticEnabled = false;
     double m_errorRate = 0.0;       // 失误率 0.0~1.0
     int m_autoEvoInterval = 200;    // 自动演化每步间隔 ms
 
-    // 可配置积分规则（新默认：诚实各1分，欺骗2/-1分，双骗0分）
-    int m_cooperateReward = 1;      // 双方合作各得
-    int m_cheatReward = 2;          // 欺骗方得
-    int m_betrayedPenalty = -1;     // 被背叛方得
-    int m_bothCheatPenalty = 0;     // 双方欺骗各得
+    // 可配置积分规则（标准囚徒困境：R=3, T=5, S=0, P=1）
+    int m_cooperateReward = 3;      // 双方合作各得
+    int m_cheatReward = 5;          // 欺骗方得
+    int m_betrayedPenalty = 0;      // 被背叛方得
+    int m_bothCheatPenalty = 1;     // 双方欺骗各得
 
     // 自动演化状态
     QTimer* m_autoEvoTimer = nullptr;
     int m_autoEvoTargetRound = 0;
     bool m_autoEvoPaused = false;
+    int m_autoEvoPairI = 0;  // 步进模式：当前交互对索引
+    int m_autoEvoPairJ = 1;
 
     // 支付矩阵（非静态，使用成员变量）
     void calculateScores(int action1, int action2,
                          int& score1, int& score2);
-
-    // 构建积分排名
-    QVector<NPCScoreInfo> buildRankings() const;
 
     // 推进到下一个对手或下一个回合
     void advanceTurn();

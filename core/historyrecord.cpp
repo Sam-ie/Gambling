@@ -2,37 +2,43 @@
 
 HistoryRecord::HistoryRecord() = default;
 
-void HistoryRecord::initialize(int participantCount)
+void HistoryRecord::ensureSize(int maxIdPlusOne)
 {
-    m_participantCount = participantCount;
-    m_history.resize(participantCount);
-    for (int i = 0; i < participantCount; ++i) {
-        m_history[i].resize(participantCount);
+    if (maxIdPlusOne <= m_capacity) return;
+    int newSize = std::max(maxIdPlusOne, m_capacity * 2);
+    m_history.resize(newSize);
+    for (int i = 0; i < newSize; ++i) {
+        if (i >= m_capacity) {
+            m_history[i].resize(newSize);
+        } else {
+            m_history[i].resize(newSize);
+        }
     }
+    m_capacity = newSize;
 }
 
-void HistoryRecord::recordInteraction(int a, int b, int actionA, int actionB)
+void HistoryRecord::recordInteraction(int npcIdA, int npcIdB, int actionA, int actionB)
 {
-    if (a >= 0 && a < m_participantCount && b >= 0 && b < m_participantCount) {
-        m_history[a][b].append({actionA, actionB});
-        m_history[b][a].append({actionB, actionA}); // 对称写入
-    }
+    int maxId = std::max(npcIdA, npcIdB) + 1;
+    ensureSize(maxId);
+    m_history[npcIdA][npcIdB].append({actionA, actionB});
+    m_history[npcIdB][npcIdA].append({actionB, actionA});
 }
 
-QVector<InteractionPair> HistoryRecord::getInteractionHistory(int a, int b) const
+QVector<InteractionPair> HistoryRecord::getInteractionHistory(int npcIdA, int npcIdB) const
 {
-    if (a >= 0 && a < m_participantCount && b >= 0 && b < m_participantCount) {
-        return m_history[a][b];
+    if (npcIdA >= 0 && npcIdA < m_capacity && npcIdB >= 0 && npcIdB < m_capacity) {
+        return m_history[npcIdA][npcIdB];
     }
     return {};
 }
 
-QVector<int> HistoryRecord::getActionsAgainst(int a, int b) const
+QVector<int> HistoryRecord::getActionsAgainst(int npcIdA, int npcIdB) const
 {
     QVector<int> actions;
-    const auto history = getInteractionHistory(a, b);
+    const auto history = getInteractionHistory(npcIdA, npcIdB);
     for (const auto& pair : history) {
-        actions.append(pair.first); // a 对 b 的行为
+        actions.append(pair.first);
     }
     return actions;
 }
@@ -46,7 +52,7 @@ void HistoryRecord::clear()
     }
 }
 
-int HistoryRecord::participantCount() const
+int HistoryRecord::capacity() const
 {
-    return m_participantCount;
+    return m_capacity;
 }
