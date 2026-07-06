@@ -48,6 +48,12 @@ private slots:
     // 人数设置
     void updateTotalPopulation();
 
+    // 预设人数
+    void on_btnPresetEasy_clicked();
+    void on_btnPresetNormal_clicked();
+    void on_btnPresetHard_clicked();
+    void on_btnPresetClassic_clicked();
+
     // 设置页按钮
     void on_btnCheatPanel_clicked();
 
@@ -85,7 +91,8 @@ private:
     void updateHelpText();
     void showPlayerHistory(int opponentId, const QString& name);
     void updateScoreDisplay();
-    void updateOpponentDisplay(const QString& name, const QString& strategy);
+    void updateOpponentDisplay(const QString& name, const QString& strategy, int opponentId = -1);
+    bool isOpponentAnonymous(int npcId) const;
     void appendLog(const QString& text);
     QString actionName(int action) const;
     void resetStats();

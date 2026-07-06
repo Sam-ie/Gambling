@@ -52,6 +52,19 @@ void HistoryRecord::clear()
     }
 }
 
+void HistoryRecord::copyHistory(int oldId, int newId)
+{
+    int maxId = std::max(oldId, newId) + 1;
+    ensureSize(maxId);
+
+    // 复制老 NPC 与其他各 NPC 的交互历史到新 NPC
+    for (int k = 0; k < m_capacity; ++k) {
+        if (k == oldId || k == newId) continue;
+        m_history[newId][k] = m_history[oldId][k];     // 新 NPC 的视角
+        m_history[k][newId] = m_history[k][oldId];     // 对方 NPC 的视角
+    }
+}
+
 int HistoryRecord::capacity() const
 {
     return m_capacity;

@@ -14,7 +14,12 @@ public:
         SWINGER,       // 摇摆者
         REPEATER,      // 复读者
         FORGIVING,     // 宽恕者（Tit-for-Two-Tats）
-        REINFORCEMENT  // 强化学习者
+        REINFORCEMENT, // 强化学习者
+        GRUDGER,       // 记仇者
+        DETECTIVE,     // 试探者
+        PAVLOV,        // 趋利者（Win-Stay Lose-Shift）
+        MAJORITY,      // 从众者
+        PERIODIC       // 周期者
     };
 
     static NPCBase* createNPC(NPCType type, int id, const QString& name);

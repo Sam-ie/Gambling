@@ -23,7 +23,12 @@ void NPCCircleWidget::initColors()
     s_strategyColors["摇摆者"]   = QColor("#F5A623");
     s_strategyColors["复读者"]   = QColor("#3B8ED9");
     s_strategyColors["宽恕者"]   = QColor("#7B68EE");
-    s_strategyColors["强化学习"] = QColor("#50C878");
+    s_strategyColors["强化学习者"] = QColor("#50C878");
+    s_strategyColors["记仇者"]   = QColor("#C62828");
+    s_strategyColors["试探者"]   = QColor("#00897B");
+    s_strategyColors["趋利者"]   = QColor("#FF6F00");
+    s_strategyColors["从众者"]   = QColor("#6A1B9A");
+    s_strategyColors["周期者"]   = QColor("#00838F");
 }
 
 NPCCircleWidget::NPCCircleWidget(QWidget* parent)
@@ -44,7 +49,10 @@ void NPCCircleWidget::setNPCData(const QVector<NPCScoreInfo>& npcs)
         v.name = npcs[i].name;
         v.strategyType = npcs[i].strategyType;
         v.score = npcs[i].score;
-        v.color = colorForStrategy(npcs[i].strategyType);
+        // 匿名 NPC 使用统一灰色，否则按策略取色
+        bool hidden = (m_hideLabelsPct > 0) &&
+            ((static_cast<uint>(npcs[i].id * 2654435761U) % 100) < static_cast<uint>(m_hideLabelsPct));
+        v.color = hidden ? QColor("#9E9E9E") : colorForStrategy(npcs[i].strategyType);
         v.angle = -M_PI / 2.0 + i * angleStep;  // 从顶部开始
         m_npcs.append(v);
     }
@@ -103,8 +111,8 @@ void NPCCircleWidget::recalcLayout()
     double w = static_cast<double>(width());
     double h = static_cast<double>(height());
 
-    // 为底部图例预留 40px
-    double usableH = h - 42;
+    // 为底部两行图例预留 56px
+    double usableH = h - 56;
     m_centerX = w / 2.0;
     m_centerY = 20 + usableH / 2.0;
 
@@ -253,26 +261,52 @@ void NPCCircleWidget::drawCenterButtons(QPainter& p)
 
 void NPCCircleWidget::drawLegend(QPainter& p)
 {
-    QStringList strategies = {"诚实者", "背叛者", "摇摆者", "复读者", "宽恕者", "强化学习"};
+    QStringList strategies = {"诚实者", "背叛者", "摇摆者", "复读者", "宽恕者", "强化学习者",
+                              "记仇者", "试探者", "趋利者", "从众者", "周期者", "匿名"};
 
     double w = static_cast<double>(width());
-    double legendY = height() - 36;
-    double itemW = w / strategies.size();
+    int row1Count = strategies.size() / 2;  // 第一行 6 个
+    int row2Count = strategies.size() - row1Count; // 第二行 6 个
+
+    double itemW1 = w / row1Count;
+    double itemW2 = w / row2Count;
+    double legendY1 = height() - 52;
+    double legendY2 = height() - 28;
 
     QFont f("", 8);
     p.setFont(f);
 
-    for (int i = 0; i < strategies.size(); ++i) {
-        double cx = (i + 0.5) * itemW;
-        QColor c = colorForStrategy(strategies[i]);
+    // 第一行
+    for (int i = 0; i < row1Count; ++i) {
+        double cx = (i + 0.5) * itemW1;
+        QColor c = (i == strategies.size() - 1)
+            ? QColor("#9E9E9E")
+            : colorForStrategy(strategies[i]);
 
         p.setPen(Qt::NoPen);
         p.setBrush(c);
-        p.drawEllipse(QPointF(cx, legendY + 10), 7, 7);
+        p.drawEllipse(QPointF(cx, legendY1 + 10), 7, 7);
 
         p.setPen(QColor("#555555"));
-        p.drawText(QRectF(cx - itemW / 2 + 14, legendY + 2, itemW - 16, 16),
+        p.drawText(QRectF(cx - itemW1 / 2 + 14, legendY1 + 2, itemW1 - 16, 16),
                    Qt::AlignLeft | Qt::AlignVCenter, strategies[i]);
+    }
+
+    // 第二行
+    for (int i = 0; i < row2Count; ++i) {
+        int idx = row1Count + i;
+        double cx = (i + 0.5) * itemW2;
+        QColor c = (idx == strategies.size() - 1)
+            ? QColor("#9E9E9E")
+            : colorForStrategy(strategies[idx]);
+
+        p.setPen(Qt::NoPen);
+        p.setBrush(c);
+        p.drawEllipse(QPointF(cx, legendY2 + 10), 7, 7);
+
+        p.setPen(QColor("#555555"));
+        p.drawText(QRectF(cx - itemW2 / 2 + 14, legendY2 + 2, itemW2 - 16, 16),
+                   Qt::AlignLeft | Qt::AlignVCenter, strategies[idx]);
     }
 }
 

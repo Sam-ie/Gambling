@@ -48,7 +48,9 @@ public:
     // ---- 游戏控制 ----
     // 根据 UI 中设置的各类型数量初始化 NPC
     void initializeNPCs(int honestCount, int deceptiveCount, int swingerCount,
-                        int repeaterCount, int delayedCount, int reinforcementCount);
+                        int repeaterCount, int forgivingCount, int reinforcementCount,
+                        int grudgerCount, int detectiveCount, int pavlovCount,
+                        int majorityCount, int periodicCount);
     void startGame(int totalRounds);
     void resetGame();
 
@@ -107,6 +109,9 @@ public:
     void startAutoEvolution(int totalRounds, int honestCount, int deceptiveCount,
                             int swingerCount, int repeaterCount,
                             int forgivingCount, int reinforcementCount,
+                            int grudgerCount, int detectiveCount,
+                            int pavlovCount, int majorityCount,
+                            int periodicCount,
                             bool startTimer = true);
     void stopAutoEvolution();
     bool autoEvoActive() const { return m_autoEvoTimer != nullptr; }

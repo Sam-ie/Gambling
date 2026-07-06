@@ -19,7 +19,10 @@ GameEngine::~GameEngine() = default;
 
 void GameEngine::initializeNPCs(int honestCount, int deceptiveCount,
                                 int swingerCount, int repeaterCount,
-                                int forgivingCount, int reinforcementCount)
+                                int forgivingCount, int reinforcementCount,
+                                int grudgerCount, int detectiveCount,
+                                int pavlovCount, int majorityCount,
+                                int periodicCount)
 {
     m_npcs.clear();
     m_npcTypes.clear();
@@ -39,6 +42,11 @@ void GameEngine::initializeNPCs(int honestCount, int deceptiveCount,
     createBatch(NPCFactory::REPEATER,      repeaterCount,    "复读者");
     createBatch(NPCFactory::FORGIVING,     forgivingCount,   "宽恕者");
     createBatch(NPCFactory::REINFORCEMENT, reinforcementCount, "强化学习");
+    createBatch(NPCFactory::GRUDGER,       grudgerCount,     "记仇者");
+    createBatch(NPCFactory::DETECTIVE,     detectiveCount,   "试探者");
+    createBatch(NPCFactory::PAVLOV,        pavlovCount,      "趋利者");
+    createBatch(NPCFactory::MAJORITY,      majorityCount,    "从众者");
+    createBatch(NPCFactory::PERIODIC,      periodicCount,    "周期者");
     m_nextNpcId++; // 为玩家位留空，避免 NPC 克隆 ID 冲突
 }
 
@@ -173,9 +181,11 @@ void GameEngine::advanceTurn()
         return;
     }
 
-    // 回合结束：应用淘汰/遗传
+    // 回合结束：淘汰 + 积分折算（玩家也参与）
     if (m_eliminationInterval > 0 && m_currentRound % m_eliminationInterval == 0) {
         applyElimination();
+        adjustScores();
+        m_playerScore = static_cast<int>(static_cast<double>(m_playerScore) * m_scoreInheritRatio);
     }
 
     emit roundChanged(m_currentRound + 1, m_totalRounds);
@@ -287,6 +297,7 @@ void GameEngine::applyElimination()
         if (curMinScore >= parentScore) break; // 全部分数相同，停止
 
         // 克隆最高分 NPC
+        int oldId = m_npcs[worstIdx]->getId(); // 记录被替换 NPC 的 ID
         int newId = m_nextNpcId++;
         QString newName = NPCFactory::getTypeName(bestType)
                         + QString("-c%1").arg(newId);
@@ -294,6 +305,11 @@ void GameEngine::applyElimination()
             NPCFactory::createNPC(bestType, newId, newName));
         m_npcs[worstIdx]->setScore(parentScore);
         m_npcTypes[worstIdx] = bestType;
+
+        // 继承历史记录
+        if (m_inheritHistory) {
+            m_history.copyHistory(oldId, newId);
+        }
     }
 
     qDebug() << "淘汰: 删除了" << eliminated.size() << "个最低分NPC, 替换为"
@@ -303,13 +319,18 @@ void GameEngine::applyElimination()
 void GameEngine::startAutoEvolution(int totalRounds, int honestCount,
                                      int deceptiveCount, int swingerCount,
                                      int repeaterCount, int forgivingCount,
-                                     int reinforcementCount, bool startTimer)
+                                     int reinforcementCount,
+                                     int grudgerCount, int detectiveCount,
+                                     int pavlovCount, int majorityCount,
+                                     int periodicCount, bool startTimer)
 {
     stopAutoEvolution();
 
     // 初始化 NPC（无玩家参与）
     initializeNPCs(honestCount, deceptiveCount, swingerCount,
-                    repeaterCount, forgivingCount, reinforcementCount);
+                    repeaterCount, forgivingCount, reinforcementCount,
+                    grudgerCount, detectiveCount, pavlovCount,
+                    majorityCount, periodicCount);
 
     for (auto& npc : m_npcs) {
         npc->resetScore();

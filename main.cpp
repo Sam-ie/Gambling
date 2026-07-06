@@ -4,6 +4,10 @@
 #include <QLocale>
 #include <QTranslator>
 
+#ifdef Q_OS_ANDROID
+#include <QScreen>
+#endif
+
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv);
@@ -18,6 +22,10 @@ int main(int argc, char *argv[])
         }
     }
     Gambling w;
+#ifdef Q_OS_ANDROID
+    w.showFullScreen();
+#else
     w.show();
+#endif
     return a.exec();
 }

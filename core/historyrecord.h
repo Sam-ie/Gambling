@@ -26,6 +26,9 @@ public:
     // 获取参与者 a 对参与者 b 的历史行为序列
     QVector<int> getActionsAgainst(int npcIdA, int npcIdB) const;
 
+    // 复制 NPC 的历史记录（克隆时继承）
+    void copyHistory(int oldId, int newId);
+
     // 清空所有历史记录
     void clear();
 

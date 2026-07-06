@@ -26,6 +26,11 @@ HEADERS += \
     core/npc/repeaternpc.h \
     core/npc/forgivingnpc.h \
     core/npc/reinforcementnpc.h \
+    core/npc/grudgernpc.h \
+    core/npc/detectivenpc.h \
+    core/npc/pavlovnpc.h \
+    core/npc/majoritynpc.h \
+    core/npc/periodicnpc.h \
     ui/gambling.h \
     ui/npccirclewidget.h
 
@@ -45,5 +50,6 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 android {
     ANDROID_APP_SCREEN_SUPPORT = anyDensity|large|normal|small
-    ANDROID_APP_ORIENTATION = portrait
+    ANDROID_APP_ORIENTATION = landscape
+    ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
 }
