@@ -13,6 +13,7 @@ SOURCES += \
     core/npc/npcfactory.cpp \
     ui/gambling.cpp \
     ui/npccirclewidget.cpp \
+    ui/numberpicker.cpp \
     main.cpp
 
 HEADERS += \
@@ -32,7 +33,8 @@ HEADERS += \
     core/npc/majoritynpc.h \
     core/npc/periodicnpc.h \
     ui/gambling.h \
-    ui/npccirclewidget.h
+    ui/npccirclewidget.h \
+    ui/numberpicker.h
 
 FORMS += \
     ui/gambling.ui \
@@ -52,4 +54,9 @@ android {
     ANDROID_APP_SCREEN_SUPPORT = anyDensity|large|normal|small
     ANDROID_APP_ORIENTATION = landscape
     ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
+
+    ANDROID_SIGN_STORE      = $$(QT_ANDROID_KEYSTORE_PATH)
+    ANDROID_SIGN_STORE_PASS = $$(QT_ANDROID_KEYSTORE_STORE_PASS)
+    ANDROID_SIGN_ALIAS      = $$(QT_ANDROID_KEYSTORE_ALIAS)
+    ANDROID_SIGN_ALIAS_PASS = $$(QT_ANDROID_KEYSTORE_KEY_PASS)
 }

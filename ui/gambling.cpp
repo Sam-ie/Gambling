@@ -2,12 +2,15 @@
 #include "ui_gambling.h"
 #include "ui_welcome.h"
 #include "npccirclewidget.h"
+#include "numberpicker.h"
 #include <algorithm>
 #include <QMap>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QScrollBar>
 #include <QScroller>
+#include <QSpacerItem>
 
 Gambling::Gambling(QWidget* parent)
     : QMainWindow(parent)
@@ -16,6 +19,29 @@ Gambling::Gambling(QWidget* parent)
 {
     ui->setupUi(this);
     setWindowState(Qt::WindowNoState);
+
+    // 修复所有 Label + NumberPicker 组合布局：label 左对齐，NumberPicker 右侧居中
+    for (auto* np : findChildren<NumberPicker*>()) {
+        QLayout* lay = np->parentWidget() ? np->parentWidget()->layout() : nullptr;
+        auto* hlay = qobject_cast<QHBoxLayout*>(lay);
+        if (!hlay) continue;
+        int idx = hlay->indexOf(np);
+        if (idx < 0) continue;
+        // label 不 expanding
+        for (int i = 0; i < idx; ++i) {
+            QLayoutItem* item = hlay->itemAt(i);
+            if (!item) continue;
+            QLabel* lbl = qobject_cast<QLabel*>(item->widget());
+            if (lbl) {
+                lbl->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+                lbl->setMinimumWidth(0);
+            }
+        }
+        // 在 label 和 NumberPicker 之间插入弹性空间，把 NP 推到右侧居中
+        auto* midSpacer = new QSpacerItem(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum);
+        hlay->insertItem(idx, midSpacer);
+        hlay->setAlignment(np, Qt::AlignCenter);
+    }
 
     // Android 触摸滚动支持
     QScroller::grabGesture(ui->textPlayerHistory->viewport(), QScroller::LeftMouseButtonGesture);
@@ -54,8 +80,8 @@ Gambling::Gambling(QWidget* parent)
     // 帮助页初始显示 UI 文件中的静态文本，修改设置后才动态更新
 
     // ---- 人数设置 SpinBox 信号 ----
-    auto connectCount = [this](QSpinBox* spin) {
-        connect(spin, QOverload<int>::of(&QSpinBox::valueChanged),
+    auto connectCount = [this](NumberPicker* spin) {
+        connect(spin, &NumberPicker::valueChanged,
                 this, &Gambling::updateTotalPopulation);
     };
     connectCount(ui->spinHonestCount);
@@ -631,11 +657,11 @@ void Gambling::setupSettingsConnections()
     ui->errorRateLayout->setAlignment(ui->sliderErrorRate, Qt::AlignVCenter);
     ui->hideLabelsLayout->setAlignment(ui->sliderHideLabels, Qt::AlignVCenter);
 
-    connect(ui->spinRounds, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(ui->spinRounds, &NumberPicker::valueChanged,
             this, [this](int v){ m_setRounds = v; });
-    connect(ui->spinElimination, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(ui->spinElimination, &NumberPicker::valueChanged,
             this, [this](int v){ m_engine->setEliminationInterval(v); updateHelpText(); });
-    connect(ui->spinElimCount, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(ui->spinElimCount, &NumberPicker::valueChanged,
             this, [this](int v){ m_engine->setEliminationCount(v); updateHelpText(); });
     connect(ui->sliderErrorRate, &QSlider::valueChanged,
             this, [this](int v){
@@ -676,10 +702,10 @@ void Gambling::setupSettingsConnections()
             ui->spinBothCheat->value());
         updateHelpText();
     };
-    connect(ui->spinCooperateRwd, QOverload<int>::of(&QSpinBox::valueChanged), this, applyScoreRules);
-    connect(ui->spinCheatRwd,     QOverload<int>::of(&QSpinBox::valueChanged), this, applyScoreRules);
-    connect(ui->spinBetrayedPnl,  QOverload<int>::of(&QSpinBox::valueChanged), this, applyScoreRules);
-    connect(ui->spinBothCheat,    QOverload<int>::of(&QSpinBox::valueChanged), this, applyScoreRules);
+    connect(ui->spinCooperateRwd, &NumberPicker::valueChanged, this, applyScoreRules);
+    connect(ui->spinCheatRwd,     &NumberPicker::valueChanged, this, applyScoreRules);
+    connect(ui->spinBetrayedPnl,  &NumberPicker::valueChanged, this, applyScoreRules);
+    connect(ui->spinBothCheat,    &NumberPicker::valueChanged, this, applyScoreRules);
 }
 
 // ============ 设置页按钮 ============
