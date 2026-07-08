@@ -1,6 +1,6 @@
 # 囚徒困境 · 多策略锦标赛模拟器
 
-![sample](.\android\sample.jpg)
+![sample](./android/sample.jpg)
 
 一个基于囚徒困境的博弈论可视化模拟工具。你可以和 11 种 AI 策略同台竞技，也可以让 AI 之间自动对战，观察哪些策略在长期博弈中胜出。
 
