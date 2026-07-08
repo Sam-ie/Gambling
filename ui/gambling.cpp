@@ -13,8 +13,10 @@
 #include <QHBoxLayout>
 #include <QScrollBar>
 #include <QScroller>
+#include <QTabBar>
 #include <QSpacerItem>
-#include <QComboBox>
+#include <QPushButton>
+#include <functional>
 #include <QApplication>
 
 Gambling::Gambling(QWidget* parent)
@@ -43,25 +45,66 @@ Gambling::Gambling(QWidget* parent)
     tb->setStyleSheet("QTabBar::tab { height: 32px; min-width: 80px; padding: 0px 20px; }");
 #endif
 
-    // ---- 修复 Label + NumberPicker 布局 ----
-    for (auto* np : findChildren<NumberPicker*>()) {
-        QLayout* lay = np->parentWidget() ? np->parentWidget()->layout() : nullptr;
-        auto* hlay = qobject_cast<QHBoxLayout*>(lay);
-        if (!hlay) continue;
-        int idx = hlay->indexOf(np);
-        if (idx < 0) continue;
-        for (int i = 0; i < idx; ++i) {
-            QLayoutItem* item = hlay->itemAt(i);
-            if (!item) continue;
-            QLabel* lbl = qobject_cast<QLabel*>(item->widget());
-            if (lbl) {
-                lbl->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
-                lbl->setMinimumWidth(0);
+    // ---- 修复「人数设置」页布局 ----
+    // 标签统一 minWidth=100，配合 stretch="1,2" 使各列等宽、NumberPicker 居中。
+    {
+        QGridLayout* grid = ui->tabWidget->findChild<QGridLayout*>("layoutNpcGrid");
+        if (grid) {
+            for (int i = 0; i < grid->count(); ++i) {
+                QLayoutItem* item = grid->itemAt(i);
+                auto* hlay = qobject_cast<QHBoxLayout*>(item ? item->layout() : nullptr);
+                if (!hlay) continue;
+                for (int j = 0; j < hlay->count(); ++j) {
+                    QLayoutItem* cell = hlay->itemAt(j);
+                    if (!cell || !cell->widget()) continue;
+                    if (auto* lbl = qobject_cast<QLabel*>(cell->widget())) {
+                        lbl->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+                        lbl->setMinimumWidth(100);
+                    } else if (auto* np = qobject_cast<NumberPicker*>(cell->widget())) {
+                        hlay->setAlignment(np, Qt::AlignCenter);
+                    }
+                }
             }
         }
-        auto* midSpacer = new QSpacerItem(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum);
-        hlay->insertItem(idx, midSpacer);
-        hlay->setAlignment(np, Qt::AlignCenter);
+    }
+
+    // ---- settingsTab：NumberPicker 居中 + 标签列等宽 ----
+    // 递归遍历所有 HBoxLayout（含嵌套 layoutElimSub）。
+    // 顶层 HBoxLayout 的第 0 位 QLabel（主标签）和第 2 位（≥4 项时的次标签）设 minWidth=140px。
+    // 嵌套 layoutElimSub 里的 NP 需要 Expanding + AlignCenter 才能在 stretch 分配中真正居中。
+    // lblElimination 是行标题（非列标签），排除在 minWidth 规则之外。
+    {
+        QWidget* settings = ui->tabWidget->findChild<QWidget*>("settingsTab");
+        if (settings && settings->layout()) {
+            std::function<void(QLayout*, int)> processLayout = [&](QLayout* layout, int depth) {
+                for (int i = 0; i < layout->count(); ++i) {
+                    QLayoutItem* item = layout->itemAt(i);
+                    if (!item) continue;
+                    auto* hbox = qobject_cast<QHBoxLayout*>(item->layout());
+                    if (!hbox) continue;
+                    for (int j = 0; j < hbox->count(); ++j) {
+                        QLayoutItem* cell = hbox->itemAt(j);
+                        if (!cell || !cell->widget()) continue;
+                        if (auto* lbl = qobject_cast<QLabel*>(cell->widget())) {
+                            bool isPrimary   = (depth == 0 && j == 0);
+                            bool isSecondary = (depth == 0 && hbox->count() >= 4 && j == 2);
+                            if ((isPrimary || isSecondary)
+                                && lbl->objectName() != QStringLiteral("lblElimination")) {
+                                lbl->setMinimumWidth(140);
+                            }
+                        } else if (auto* np = qobject_cast<NumberPicker*>(cell->widget())) {
+                            // 嵌套布局（如 layoutElimSub）里的 NP 需要 Expanding 才能让 cell 宽于 widget，
+                            // AlignCenter 才能产生实际居中效果（Maximum 策略下 cell == widget 宽度）。
+                            if (depth >= 1)
+                                np->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                            hbox->setAlignment(np, Qt::AlignCenter);
+                        }
+                    }
+                    processLayout(hbox, depth + 1);
+                }
+            };
+            processLayout(settings->layout(), 0);
+        }
     }
 
     // ---- Android 触摸滚动 ----
@@ -88,12 +131,18 @@ Gambling::Gambling(QWidget* parent)
         stack->setCurrentIndex(1);
     });
 
-    // 语言切换
-    auto* comboLang = m_welcomePage->findChild<QComboBox*>("comboLanguage");
-    if (comboLang) {
-        comboLang->setMaxVisibleItems(6);
-        connect(comboLang, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, &Gambling::onLanguageChanged);
+    // 语言切换（两个互斥按钮，模拟 toggle）
+    auto* btnZh = m_welcomePage->findChild<QPushButton*>("btnLangZh");
+    auto* btnEn = m_welcomePage->findChild<QPushButton*>("btnLangEn");
+    if (btnZh && btnEn) {
+        connect(btnZh, &QPushButton::clicked, this, [this, btnEn]() {
+            onLanguageChanged(0);
+            btnEn->setChecked(false);
+        });
+        connect(btnEn, &QPushButton::clicked, this, [this, btnZh]() {
+            onLanguageChanged(1);
+            btnZh->setChecked(false);
+        });
     }
 
     // ---- NPCCircleWidget ----
@@ -104,6 +153,8 @@ Gambling::Gambling(QWidget* parent)
 
     connect(m_circleWidget, &NPCCircleWidget::startClicked,
             this, &Gambling::onStartClicked);
+    connect(m_circleWidget, &NPCCircleWidget::npcDoubleClicked,
+            this, &Gambling::onNpcDoubleClicked);
 
     // ---- SpinGroupController ----
     setupSpinController();
@@ -113,7 +164,6 @@ Gambling::Gambling(QWidget* parent)
     setupSettingsConnections();
 
     // ---- 初始化引擎参数 ----
-    ui->comboCheatNpc->setMaxVisibleItems(6);
     m_engine->setScoreRules(
         ui->spinCooperateRwd->value(),
         ui->spinCheatRwd->value(),
@@ -241,7 +291,7 @@ void Gambling::setupTooltips()
     ui->spinBothCheat->setToolTip(payoffTt[3]);
 
     ui->lblCheatNpc->setToolTip(tr("选择要修改分数的 NPC。"));
-    ui->comboCheatNpc->setToolTip(tr("选择要修改分数的 NPC。"));
+    ui->editCheatNpc->setToolTip(tr("在游戏页双击 NPC 圆圈来选择作弊目标。"));
     ui->spinCheatScore->setToolTip(tr("设置该 NPC 的新分数。"));
     ui->btnCheatPanel->setToolTip(tr("将选定 NPC 的分数设为指定值。"));
     ui->spinAutoEvo->setToolTip(tr("自动演化的总回合数。"));
@@ -348,6 +398,10 @@ void Gambling::resetUI()
     m_circleWidget->setNPCData(QVector<NPCScoreInfo>());
     updateOpponentDisplay("", "");
     ui->lblGameInfo->setPlainText("已重置");
+
+    // 清除作弊选中
+    m_cheatNpcId = -1;
+    ui->editCheatNpc->clear();
 
     ui->btnEvoStart->setEnabled(true);
     setEvoBtnState(EVO_IDLE);
@@ -704,10 +758,19 @@ void Gambling::resetStats()
 
 void Gambling::updateCheatCombo()
 {
-    ui->comboCheatNpc->clear();
+    // 更新 editCheatNpc：如果当前选中的 NPC 仍在列表中，保留选中
+    bool found = false;
     for (const auto& n : m_engine->npcs()) {
-        ui->comboCheatNpc->addItem(
-            QString("%1 [%2]").arg(n->getName()).arg(n->getStrategyType()));
+        if (n->getId() == m_cheatNpcId) {
+            ui->editCheatNpc->setText(
+                QString("%1 [%2]").arg(n->getName()).arg(n->getStrategyType()));
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        m_cheatNpcId = -1;
+        ui->editCheatNpc->clear();
     }
 }
 
@@ -715,11 +778,34 @@ void Gambling::updateCheatCombo()
 
 void Gambling::on_btnCheatPanel_clicked()
 {
-    int idx = ui->comboCheatNpc->currentIndex();
-    if (idx < 0 || idx >= static_cast<int>(m_engine->npcs().size())) return;
+    if (m_cheatNpcId < 0) return;
+    int idx = -1;
+    const auto& npcs = m_engine->npcs();
+    for (int i = 0; i < static_cast<int>(npcs.size()); ++i) {
+        if (npcs[i]->getId() == m_cheatNpcId) { idx = i; break; }
+    }
+    if (idx < 0) return;
     QVector<QPair<int, int>> updates;
     updates.append({idx, ui->spinCheatScore->value()});
     m_engine->setNPCScores(updates);
+}
+
+void Gambling::onNpcDoubleClicked(int npcId)
+{
+    m_cheatNpcId = npcId;
+    // 查找 NPC 名称并更新 line edit
+    for (const auto& n : m_engine->npcs()) {
+        if (n->getId() == npcId) {
+            ui->editCheatNpc->setText(
+                QString("%1 [%2]").arg(n->getName()).arg(n->getStrategyType()));
+            // 自动切换到设置页，方便用户立即修改该 NPC 分数
+            ui->tabWidget->setCurrentWidget(ui->settingsTab);
+            return;
+        }
+    }
+    // 未找到则清空
+    m_cheatNpcId = -1;
+    ui->editCheatNpc->clear();
 }
 
 // ============ 帮助页 ============
@@ -785,14 +871,11 @@ void Gambling::onLanguageChanged(int index)
     // 刷新 UI 文本
     ui->retranslateUi(this);
     if (m_welcomeUi) m_welcomeUi->retranslateUi(m_welcomePage);
-    auto* comboLang = m_welcomePage->findChild<QComboBox*>("comboLanguage");
-    if (comboLang) comboLang->blockSignals(true);
     m_circleWidget->setEnglish(m_isEnglish);
     m_circleWidget->retranslateUi();
     setEvoBtnState(m_evoBtnState);  // 恢复演化按钮状态（retranslateUi 会覆盖）
     setupTooltips();
     updateHelpText();
-    if (comboLang) comboLang->blockSignals(false);
 }
 
 void Gambling::setEvoBtnState(EvoBtnState state)

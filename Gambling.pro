@@ -83,17 +83,13 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
+
 android {
     ANDROID_APP_SCREEN_SUPPORT = anyDensity|large|normal|small
     ANDROID_APP_ORIENTATION = landscape
     ANDROID_PACKAGE_SOURCE_DIR = $$PWD/android
-
     # make install → 部署 .so 到 android-build/libs，供 androiddeployqt 打包 APK
     target.path = /libs/$${ANDROID_TARGET_ARCH}
     INSTALLS += target
 
-    ANDROID_SIGN_STORE      = $$(QT_ANDROID_KEYSTORE_PATH)
-    ANDROID_SIGN_STORE_PASS = $$(QT_ANDROID_KEYSTORE_STORE_PASS)
-    ANDROID_SIGN_ALIAS      = $$(QT_ANDROID_KEYSTORE_ALIAS)
-    ANDROID_SIGN_ALIAS_PASS = $$(QT_ANDROID_KEYSTORE_KEY_PASS)
 }

@@ -353,6 +353,25 @@ void NPCCircleWidget::mousePressEvent(QMouseEvent* event)
     event->accept();
 }
 
+void NPCCircleWidget::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (m_npcs.isEmpty()) return;
+
+    QPointF pt = event->position();
+    const double nodeRadius = qMin(m_radius * 0.07, 14.0);
+    const double hitRadius = nodeRadius + 6;  // +6 容错（与高亮光环一致）
+
+    for (const auto& npc : m_npcs) {
+        double dx = pt.x() - npc.x;
+        double dy = pt.y() - npc.y;
+        if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+            emit npcDoubleClicked(npc.id);
+            return;
+        }
+    }
+    event->ignore();
+}
+
 void NPCCircleWidget::retranslateUi()
 {
     update(); // 强制重绘以刷新按钮文本

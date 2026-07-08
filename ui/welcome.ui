@@ -60,35 +60,74 @@
       </spacer>
      </item>
      <item>
-      <widget class="QComboBox" name="comboLanguage">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="minimumSize">
-        <size>
-         <width>120</width>
-         <height>36</height>
-        </size>
-       </property>
-       <property name="font">
-        <font>
-         <pointsize>13</pointsize>
-        </font>
+      <layout class="QHBoxLayout" name="layoutLangBtns">
+       <property name="spacing">
+        <number>0</number>
        </property>
        <item>
-        <property name="text">
-         <string>中文</string>
-        </property>
+        <widget class="QPushButton" name="btnLangZh">
+         <property name="minimumSize">
+          <size>
+           <width>90</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>80</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="font">
+          <font>
+           <pointsize>13</pointsize>
+          </font>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">QPushButton { border: 1px solid #bbb; border-top-left-radius: 6px; border-bottom-left-radius: 6px; border-right: none; padding: 4px 8px; } QPushButton:checked { background: #52ae8b; color: white; border-color: #52ae8b; } QPushButton:!checked { background: #f8f8f8; color: #555; } QPushButton:!checked:hover { background: #e8e8e8; }</string>
+         </property>
+         <property name="text">
+          <string>中文</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
        </item>
        <item>
-        <property name="text">
-         <string>English</string>
-        </property>
+        <widget class="QPushButton" name="btnLangEn">
+         <property name="minimumSize">
+          <size>
+           <width>90</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>80</width>
+           <height>36</height>
+          </size>
+         </property>
+         <property name="font">
+          <font>
+           <pointsize>13</pointsize>
+          </font>
+         </property>
+         <property name="styleSheet">
+          <string notr="true">QPushButton { border: 1px solid #bbb; border-top-right-radius: 6px; border-bottom-right-radius: 6px; padding: 4px 8px; } QPushButton:checked { background: #52ae8b; color: white; border-color: #52ae8b; } QPushButton:!checked { background: #f8f8f8; color: #555; } QPushButton:!checked:hover { background: #e8e8e8; }</string>
+         </property>
+         <property name="text">
+          <string>English</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+        </widget>
        </item>
-      </widget>
+      </layout>
      </item>
     </layout>
    </item>

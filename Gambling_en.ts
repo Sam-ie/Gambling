@@ -54,7 +54,10 @@
     <message><source>玩家游戏轮数</source><translation>Player Rounds</translation></message>
     <message><source>继承历史</source><translation>Inherit History</translation></message>
     <message><source>启用</source><translation>Enable</translation></message>
-    <message><source>淘汰（间隔/人数）</source><translation>Eliminate (Interval / Count)</translation></message>
+    <message><source>淘汰</source><translation>Eliminate</translation></message>
+    <message><source>每</source><translation>Every</translation></message>
+    <message><source>轮淘汰</source><translation>rounds, eliminate</translation></message>
+    <message><source>名低分NPC</source><translation>lowest NPCs</translation></message>
     <message><source>失误率</source><translation>Error Rate</translation></message>
     <message><source>资产继承</source><translation>Score Carryover</translation></message>
     <message><source>随机匿名</source><translation>Hide Labels</translation></message>
@@ -99,6 +102,7 @@ and discover which strategies win in the long run.</translation></message>
     <message><source>一方合作、对方背叛时，合作方的得分（S）。</source><translation>Sucker&apos;s payoff: cooperator&apos;s score when opponent defects (S).</translation></message>
     <message><source>双方都背叛时的惩罚分（P）。</source><translation>Punishment when both defect (P).</translation></message>
     <message><source>选择要修改分数的 NPC。</source><translation>Select NPC to modify score.</translation></message>
+    <message><source>在游戏页双击 NPC 圆圈来选择作弊目标。</source><translation>Double-click an NPC circle on the game page to select a cheat target.</translation></message>
     <message><source>设置该 NPC 的新分数。</source><translation>Set new score for this NPC.</translation></message>
     <message><source>将选定 NPC 的分数设为指定值。</source><translation>Set the selected NPC&apos;s score to the specified value.</translation></message>
     <message><source>自动演化的总回合数。</source><translation>Total rounds for auto evolution.</translation></message>
@@ -106,6 +110,7 @@ and discover which strategies win in the long run.</translation></message>
     <message><source>极速演化：每0.05秒一整轮，无停顿。</source><translation>Fast mode: one full round every 0.05s, no pauses.</translation></message>
     <message><source>执行一对 NPC 交互。未开始时自动启动并暂停。</source><translation>Execute one NPC pair. Auto-starts and pauses if not already running.</translation></message>
     <message><source>执行一整轮 NPC 交互。未开始时自动启动并暂停。</source><translation>Execute one full NPC round. Auto-starts and pauses if not already running.</translation></message>
+    <message><source>请在游戏页双击对应NPC</source><translation>Double-click NPC on game page</translation></message>
 </context>
 <context>
     <name>Welcome</name>

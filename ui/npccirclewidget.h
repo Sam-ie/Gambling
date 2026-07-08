@@ -34,10 +34,12 @@ public:
 
 signals:
     void startClicked();
+    void npcDoubleClicked(int npcId);  // 在游戏页双击NPC圆圈
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
 private:

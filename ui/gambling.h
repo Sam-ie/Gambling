@@ -55,6 +55,7 @@ private slots:
 
     // 作弊
     void on_btnCheatPanel_clicked();
+    void onNpcDoubleClicked(int npcId);       // 游戏页双击NPC选择作弊目标
 
     // GameEngine 信号处理
     void onGameStarted();
@@ -91,6 +92,7 @@ private:
     QString m_currentOpponentStrategy;
     bool m_isEnglish = false;
     EvoBtnState m_evoBtnState = EVO_IDLE;
+    int m_cheatNpcId = -1;  // 游戏页双击选中的作弊目标NPC ID，-1=未选择
 
     void setEvoBtnState(EvoBtnState state);
 
