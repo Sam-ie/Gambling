@@ -6,29 +6,43 @@
 #include <cmath>
 #include <algorithm>
 
-QMap<QString, QColor> NPCCircleWidget::s_strategyColors;
-
-QColor NPCCircleWidget::colorForStrategy(const QString& type) const
-{
-    if (s_strategyColors.contains(type))
-        return s_strategyColors[type];
-    return QColor("#888888");
-}
+QMap<int, QColor> NPCCircleWidget::s_strategyColors;
+QMap<QString, int> NPCCircleWidget::s_typeByName;
 
 void NPCCircleWidget::initColors()
 {
     if (!s_strategyColors.isEmpty()) return;
-    s_strategyColors["诚实者"]   = QColor("#E85A50");
-    s_strategyColors["背叛者"]   = QColor("#4A4A4A");
-    s_strategyColors["摇摆者"]   = QColor("#F5A623");
-    s_strategyColors["复读者"]   = QColor("#3B8ED9");
-    s_strategyColors["宽恕者"]   = QColor("#7B68EE");
-    s_strategyColors["强化学习者"] = QColor("#50C878");
-    s_strategyColors["记仇者"]   = QColor("#C62828");
-    s_strategyColors["试探者"]   = QColor("#00897B");
-    s_strategyColors["趋利者"]   = QColor("#FF6F00");
-    s_strategyColors["从众者"]   = QColor("#6A1B9A");
-    s_strategyColors["周期者"]   = QColor("#00838F");
+
+    auto add = [](NPCFactory::NPCType type, const QColor& c) {
+        int idx = static_cast<int>(type);
+        s_strategyColors[idx] = c;
+        s_typeByName[NPCFactory::typeName(type)] = idx;
+    };
+
+    add(NPCFactory::HONEST,        QColor("#E85A50"));
+    add(NPCFactory::DECEPTIVE,     QColor("#4A4A4A"));
+    add(NPCFactory::SWINGER,       QColor("#F5A623"));
+    add(NPCFactory::REPEATER,      QColor("#3B8ED9"));
+    add(NPCFactory::FORGIVING,     QColor("#7B68EE"));
+    add(NPCFactory::REINFORCEMENT, QColor("#50C878"));
+    add(NPCFactory::GRUDGER,       QColor("#C62828"));
+    add(NPCFactory::DETECTIVE,     QColor("#00897B"));
+    add(NPCFactory::PAVLOV,        QColor("#FF6F00"));
+    add(NPCFactory::MAJORITY,      QColor("#6A1B9A"));
+    add(NPCFactory::PERIODIC,      QColor("#00838F"));
+}
+
+int NPCCircleWidget::typeIdxFromName(const QString& chineseName)
+{
+    initColors();
+    return s_typeByName.value(chineseName, -1);
+}
+
+QColor NPCCircleWidget::colorForType(int typeIdx) const
+{
+    if (s_strategyColors.contains(typeIdx))
+        return s_strategyColors[typeIdx];
+    return QColor("#9E9E9E");
 }
 
 NPCCircleWidget::NPCCircleWidget(QWidget* parent)
@@ -36,12 +50,13 @@ NPCCircleWidget::NPCCircleWidget(QWidget* parent)
 {
     initColors();
     setMinimumSize(200, 200);
-    setMouseTracking(false);
 }
 
 void NPCCircleWidget::setNPCData(const QVector<NPCScoreInfo>& npcs)
 {
     m_npcs.clear();
+    m_pairHighlightA = -1;
+    m_pairHighlightB = -1;
     double angleStep = npcs.isEmpty() ? 0 : 2.0 * M_PI / npcs.size();
     for (int i = 0; i < npcs.size(); ++i) {
         NPCVisual v;
@@ -52,12 +67,12 @@ void NPCCircleWidget::setNPCData(const QVector<NPCScoreInfo>& npcs)
         // 匿名 NPC 使用统一灰色，否则按策略取色
         bool hidden = (m_hideLabelsPct > 0) &&
             ((static_cast<uint>(npcs[i].id * 2654435761U) % 100) < static_cast<uint>(m_hideLabelsPct));
-        v.color = hidden ? QColor("#9E9E9E") : colorForStrategy(npcs[i].strategyType);
+        v.color = hidden ? QColor("#9E9E9E") : colorForType(typeIdxFromName(npcs[i].strategyType));
         v.angle = -M_PI / 2.0 + i * angleStep;  // 从顶部开始
         m_npcs.append(v);
     }
     recalcLayout();
-    update();
+    repaint();
 }
 
 void NPCCircleWidget::setPlayerScore(int score)
@@ -82,6 +97,11 @@ void NPCCircleWidget::setCurrentOpponent(int npcId)
 void NPCCircleWidget::setGameRunning(bool running)
 {
     m_gameRunning = running;
+    if (!running) {
+        m_currentOpponentId = -1;
+        m_pairHighlightA = -1;
+        m_pairHighlightB = -1;
+    }
     update();
 }
 
@@ -123,7 +143,7 @@ void NPCCircleWidget::recalcLayout()
     if (m_radius < 50) m_radius = 50;
 
     // 圆心按钮区域
-    double bw = qMin(m_radius * 0.5, 120.0);
+    double bw = qMin(m_radius * 0.6, 160.0);
     double bh = qMin(m_radius * 0.28, 58.0);
     m_btnStartRect = QRectF(m_centerX - bw / 2, m_centerY - bh / 2, bw, bh);
 
@@ -162,8 +182,11 @@ void NPCCircleWidget::drawNPCs(QPainter& p)
     if (m_npcs.isEmpty()) {
         p.setPen(QColor("#AAAAAA"));
         p.setFont(QFont("", 14));
-        p.drawText(QRectF(0, m_centerY - 20, width(), 40),
-                   Qt::AlignCenter, "暂无 NPC，请先设置人数");
+        double textY = m_centerY + m_radius * 0.2;
+        p.drawText(QRectF(0, textY, width(), 50),
+                   Qt::AlignCenter,
+                   m_english ? "No NPCs — configure population first"
+                             : "暂无 NPC，请先设置人数");
         return;
     }
 
@@ -229,7 +252,7 @@ void NPCCircleWidget::drawNPCs(QPainter& p)
 
         QFont f("", 8);
         p.setFont(f);
-        p.setPen(QColor("#555555"));
+        p.setPen(QColor("#333333"));
         // 随机匿名：按比例隐藏类型标签
         bool hidden = (m_hideLabelsPct > 0) && ((static_cast<uint>(npc.id * 2654435761U) % 100) < static_cast<uint>(m_hideLabelsPct));
         QString displayName = hidden ? QStringLiteral("?") : (npc.name.left(1) + QString::number(npc.id));
@@ -256,17 +279,29 @@ void NPCCircleWidget::drawCenterButtons(QPainter& p)
 
     p.setPen(Qt::white);
     p.setFont(btnFont);
-    p.drawText(m_btnStartRect, Qt::AlignCenter, m_gameRunning ? "重置" : "开始游戏");
+    p.drawText(m_btnStartRect, Qt::AlignCenter, m_gameRunning ? m_btnResetText : m_btnStartText);
 }
 
 void NPCCircleWidget::drawLegend(QPainter& p)
 {
-    QStringList strategies = {"诚实者", "背叛者", "摇摆者", "复读者", "宽恕者", "强化学习者",
-                              "记仇者", "试探者", "趋利者", "从众者", "周期者", "匿名"};
+    const auto& types = NPCFactory::allTypes();
+    QStringList names;
+    QString anonLabel;
+    if (m_english) {
+        const QStringList enNames = {"Honest", "Deceiver", "Swinger", "Repeater", "Forgiver",
+                                     "Reinforcer", "Grudger", "Detective", "Pavlovian",
+                                     "Majority", "Periodic"};
+        names = enNames;
+        anonLabel = "Hidden";
+    } else {
+        for (auto t : types) names.append(NPCFactory::typeName(t));
+        anonLabel = "匿名";
+    }
+    names.append(anonLabel);
 
     double w = static_cast<double>(width());
-    int row1Count = strategies.size() / 2;  // 第一行 6 个
-    int row2Count = strategies.size() - row1Count; // 第二行 6 个
+    int row1Count = names.size() / 2;
+    int row2Count = names.size() - row1Count;
 
     double itemW1 = w / row1Count;
     double itemW2 = w / row2Count;
@@ -275,39 +310,38 @@ void NPCCircleWidget::drawLegend(QPainter& p)
 
     QFont f("", 8);
     p.setFont(f);
+    QFontMetrics fm(f);
 
-    // 第一行
-    for (int i = 0; i < row1Count; ++i) {
-        double cx = (i + 0.5) * itemW1;
-        QColor c = (i == strategies.size() - 1)
-            ? QColor("#9E9E9E")
-            : colorForStrategy(strategies[i]);
+    // 绘制一行图例：圆圈+文字作为整体居中
+    auto drawLegendRow = [&](int count, int startIdx, double itemW, double legendY,
+                             const QStringList& names, const auto& types) {
+        for (int i = 0; i < count; ++i) {
+            int idx = startIdx + i;
+            QColor c = (idx >= static_cast<int>(types.size()))
+                ? QColor("#9E9E9E")
+                : colorForType(static_cast<int>(types[idx]));
 
-        p.setPen(Qt::NoPen);
-        p.setBrush(c);
-        p.drawEllipse(QPointF(cx, legendY1 + 10), 7, 7);
+            const double circleR = 7;
+            const double gap = 3;
+            int textW = fm.horizontalAdvance(names[idx]);
+            double groupW = circleR * 2 + gap + textW;
+            double groupLeft = (i + 0.5) * itemW - groupW / 2;
 
-        p.setPen(QColor("#555555"));
-        p.drawText(QRectF(cx - itemW1 / 2 + 14, legendY1 + 2, itemW1 - 16, 16),
-                   Qt::AlignLeft | Qt::AlignVCenter, strategies[i]);
-    }
+            // 圆
+            p.setPen(Qt::NoPen);
+            p.setBrush(c);
+            p.drawEllipse(QPointF(groupLeft + circleR, legendY + 10), circleR, circleR);
 
-    // 第二行
-    for (int i = 0; i < row2Count; ++i) {
-        int idx = row1Count + i;
-        double cx = (i + 0.5) * itemW2;
-        QColor c = (idx == strategies.size() - 1)
-            ? QColor("#9E9E9E")
-            : colorForStrategy(strategies[idx]);
+            // 文字
+            p.setPen(QColor("#333333"));
+            double textX = groupLeft + circleR * 2 + gap;
+            p.drawText(QRectF(textX, legendY + 2, textW, 16),
+                       Qt::AlignLeft | Qt::AlignVCenter, names[idx]);
+        }
+    };
 
-        p.setPen(Qt::NoPen);
-        p.setBrush(c);
-        p.drawEllipse(QPointF(cx, legendY2 + 10), 7, 7);
-
-        p.setPen(QColor("#555555"));
-        p.drawText(QRectF(cx - itemW2 / 2 + 14, legendY2 + 2, itemW2 - 16, 16),
-                   Qt::AlignLeft | Qt::AlignVCenter, strategies[idx]);
-    }
+    drawLegendRow(row1Count, 0, itemW1, legendY1, names, types);
+    drawLegendRow(row2Count, row1Count, itemW2, legendY2, names, types);
 }
 
 void NPCCircleWidget::mousePressEvent(QMouseEvent* event)
@@ -317,4 +351,17 @@ void NPCCircleWidget::mousePressEvent(QMouseEvent* event)
         emit startClicked();
     }
     event->accept();
+}
+
+void NPCCircleWidget::retranslateUi()
+{
+    update(); // 强制重绘以刷新按钮文本
+}
+
+void NPCCircleWidget::setEnglish(bool english)
+{
+    m_english = english;
+    m_btnStartText = english ? "Play" : "玩家对战";
+    m_btnResetText = english ? "Reset" : "重置";
+    update();
 }

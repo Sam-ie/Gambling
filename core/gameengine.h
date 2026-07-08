@@ -2,24 +2,19 @@
 #define GAMEENGINE_H
 
 #include <QObject>
-#include <QTimer>
 #include <QVector>
-#include <QPair>
-#include <QString>
 #include <memory>
 #include <vector>
 
-#include "npcbase.h"
-#include "npcfactory.h"
+#include "npcscoreinfo.h"
+#include "npc/npcbase.h"
+#include "npc/npcfactory.h"
+#include "npc/npcconfig.h"
 #include "historyrecord.h"
-
-// 单个 NPC 的概要信息（供 UI 展示）
-struct NPCScoreInfo {
-    int id;
-    QString name;
-    QString strategyType;
-    int score;
-};
+#include "payoffmatrix.h"
+#include "interactionrunner.h"
+#include "elimination/eliminationmanager.h"
+#include "evolution/autoevolutionengine.h"
 
 class GameEngine : public QObject
 {
@@ -27,15 +22,13 @@ class GameEngine : public QObject
 
 public:
     enum Phase {
-        IDLE,               // 未开始
-        NPC_INTERACTION,    // NPC 间交互中
-        WAITING_FOR_PLAYER, // 等待玩家选择
-        ROUND_END,          // 回合结束
-        FINISHED            // 游戏结束
+        IDLE,
+        NPC_INTERACTION,
+        WAITING_FOR_PLAYER,
+        FINISHED
     };
 
     explicit GameEngine(QObject* parent = nullptr);
-    ~GameEngine() override;
 
     // ---- 状态查询 ----
     Phase phase() const { return m_phase; }
@@ -46,79 +39,57 @@ public:
     const std::vector<std::unique_ptr<NPCBase>>& npcs() const { return m_npcs; }
 
     // ---- 游戏控制 ----
-    // 根据 UI 中设置的各类型数量初始化 NPC
-    void initializeNPCs(int honestCount, int deceptiveCount, int swingerCount,
-                        int repeaterCount, int forgivingCount, int reinforcementCount,
-                        int grudgerCount, int detectiveCount, int pavlovCount,
-                        int majorityCount, int periodicCount);
+    void initializeNPCs(const NPCConfig& config);
     void startGame(int totalRounds);
     void resetGame();
 
-    // 玩家行动：0=诚实, 1=欺骗
-    void playerAction(int action);
+    void playerAction(int action);  // 0=合作, 1=背叛
 
-    // 运行 NPC 间的完整一轮交互
-    void runNPCRound();
-
-    // ---- 高级设置 ----
+    // ---- 配置 ----
     void setTotalRounds(int rounds) { m_totalRounds = rounds; }
-    void setEliminationInterval(int rounds) { m_eliminationInterval = rounds; }
-    int eliminationInterval() const { return m_eliminationInterval; }
-    void setInheritHistory(bool enabled) { m_inheritHistory = enabled; }
-    bool inheritHistory() const { return m_inheritHistory; }
-    void setAutoEvolutionSpeed(int ms) { m_autoEvoInterval = ms; }
-    void setErrorRate(double rate) { m_errorRate = rate; }
-    double errorRate() const { return m_errorRate; }
-    void setScoreInheritRatio(int pct) { m_scoreInheritRatio = pct / 100.0; }
-    int scoreInheritRatio() const { return static_cast<int>(m_scoreInheritRatio * 100); }
+    void setEliminationInterval(int rounds) { m_eliminator.setInterval(rounds); }
+    int eliminationInterval() const { return m_eliminator.interval(); }
+    void setEliminationCount(int cnt) { m_eliminator.setCount(cnt); }
+    int eliminationCount() const { return m_eliminator.count(); }
+    void setInheritHistory(bool enabled) { m_eliminator.setInheritHistory(enabled); }
+    bool inheritHistory() const { return m_eliminator.inheritHistory(); }
+    void setErrorRate(double rate);
+    void setScoreInheritRatio(int pct);
+    int scoreInheritRatio() const;
 
-    // ---- 积分规则配置 ----
-    void setScoreRules(int cooperateReward, int cheatReward,
-                       int betrayedPenalty, int bothCheatPenalty) {
-        m_cooperateReward = cooperateReward;
-        m_cheatReward = cheatReward;
-        m_betrayedPenalty = betrayedPenalty;
-        m_bothCheatPenalty = bothCheatPenalty;
-    }
-    int cooperateReward() const { return m_cooperateReward; }
-    int cheatReward() const { return m_cheatReward; }
-    int betrayedPenalty() const { return m_betrayedPenalty; }
-    int bothCheatPenalty() const { return m_bothCheatPenalty; }
+    // ---- 积分规则 ----
+    void setScoreRules(int R, int T, int S, int P) { m_payoff.set(R, T, S, P); }
+    int cooperateReward()  const { return m_payoff.cooperateReward(); }
+    int cheatReward()      const { return m_payoff.cheatReward(); }
+    int betrayedPenalty()  const { return m_payoff.betrayedPenalty(); }
+    int bothCheatPenalty() const { return m_payoff.bothCheatPenalty(); }
 
-    // ---- 淘汰人数 ----
-    void setEliminationCount(int cnt) { m_eliminationCount = qBound(1, cnt, 25); }
-    int eliminationCount() const { return m_eliminationCount; }
+    void setAutoEvolutionSpeed(int ms);
 
-    // 查询玩家与某NPC的交互历史
+    // ---- 查询 ----
     QVector<InteractionPair> getPlayerInteractionHistory(int npcId) const;
+    QVector<NPCScoreInfo> buildRankings() const;
 
+    // ---- 作弊 ----
     void cheatAddScore(int points);
+    void setNPCScores(const QVector<QPair<int, int>>& updates);
 
-    // 作弊：设定指定 NPC 的分数
-    void setNPCScores(const QVector<QPair<int, int>>& npcScoreUpdates);
+    // ---- 自动演化委托 ----
+    void startAutoEvolution(int totalRounds, bool startTimer = true);
+    void stopAutoEvolution()    { m_evoEngine.stop(); }
+    void pauseAutoEvolution()   { m_evoEngine.pause(); }
+    void resumeAutoEvolution()  { m_evoEngine.resume(); }
+    void stepAutoEvolutionPair(){ if (!m_evoEngine.isRunning()) startAutoEvolution(m_totalRounds, false); m_evoEngine.stepPair(); }
+    void stepAutoEvolution()    { if (!m_evoEngine.isRunning()) startAutoEvolution(m_totalRounds, false); m_evoEngine.stepRound(); }
+    void startAutoEvolutionFast();
+    bool autoEvoActive() const { return m_evoEngine.isRunning(); }
+    bool autoEvoPaused() const { return m_evoEngine.isPaused(); }
 
-    // 自动演化控制
-    void pauseAutoEvolution();
-    void resumeAutoEvolution();
-    void stepAutoEvolution();     // 单轮（逐对回显，定时器驱动）
-    void stepAutoEvolutionPair(); // 步进（逐对回显，手动点击）
-    void startAutoEvolutionFast(); // 极速演化（一轮一帧）
-
-    // 自动演化：纯 NPC 模拟，无玩家参与
-    // 通过 QTimer 分步运行，每步发出 autoEvoStep 信号
-    void startAutoEvolution(int totalRounds, int honestCount, int deceptiveCount,
-                            int swingerCount, int repeaterCount,
-                            int forgivingCount, int reinforcementCount,
-                            int grudgerCount, int detectiveCount,
-                            int pavlovCount, int majorityCount,
-                            int periodicCount,
-                            bool startTimer = true);
-    void stopAutoEvolution();
-    bool autoEvoActive() const { return m_autoEvoTimer != nullptr; }
-
-    // 单步淘汰（删除最低分，克隆最高分）
-    void applyElimination();
-
+    // ---- 暴露子模块（供演化引擎回调） ----
+    InteractionRunner& runner()          { return m_runner; }
+    PayoffMatrix&      payoff()          { return m_payoff; }
+    EliminationManager& eliminator()     { return m_eliminator; }
+    AutoEvolutionEngine& evoEngine()      { return m_evoEngine; }
 
 signals:
     void gameStarted();
@@ -132,64 +103,33 @@ signals:
     void allScoresUpdated(const QVector<NPCScoreInfo>& rankings);
     void npcInteractionsComplete();
 
-    // 自动演化信号
+    // 自动演化信号（从 AutoEvolutionEngine 转发）
     void autoEvoStep(int round, int totalRounds,
                      const QVector<NPCScoreInfo>& rankings);
-    void autoEvoPairDone(int npcIdA, int npcIdB); // 一对交互完成
+    void autoEvoPairDone(int npcIdA, int npcIdB);
     void autoEvoFinished(const QVector<NPCScoreInfo>& finalRankings);
 
-public:
-    // 构建积分排名（UI 需要）
-    QVector<NPCScoreInfo> buildRankings() const;
-
 private:
+    // ---- 游戏状态 ----
     std::vector<std::unique_ptr<NPCBase>> m_npcs;
-    std::vector<NPCFactory::NPCType> m_npcTypes;  // 并行记录每个 NPC 的类型
+    std::vector<NPCFactory::NPCType> m_npcTypes;
     HistoryRecord m_history;
+    PayoffMatrix m_payoff;
+    InteractionRunner m_runner;
+    EliminationManager m_eliminator;
+    AutoEvolutionEngine m_evoEngine;
 
     int m_playerScore = 0;
     int m_currentRound = 0;
     int m_totalRounds = 10;
-    int m_nextNpcId = 0;  // 全局 NPC ID 计数器，避免与玩家位冲突
+    int m_nextNpcId = 0;
     Phase m_phase = IDLE;
     int m_currentOpponentIdx = 0;
 
-    // 高级设置
-    int m_eliminationInterval = 2;  // 每 N 回合
-    int m_eliminationCount = 1;      // 每次淘汰人数
-    bool m_inheritHistory = true;  // 克隆是否继承历史
-    double m_scoreInheritRatio = 0.0; // 每轮后积分继承比例 0.0~1.0
-    double m_errorRate = 0.0;       // 失误率 0.0~1.0
-    int m_autoEvoInterval = 100;    // 自动演化每步间隔 ms
-
-    // 可配置积分规则（标准囚徒困境：R=3, T=5, S=0, P=1）
-    int m_cooperateReward = 3;      // 双方合作各得
-    int m_cheatReward = 5;          // 欺骗方得
-    int m_betrayedPenalty = 0;      // 被背叛方得
-    int m_bothCheatPenalty = 1;     // 双方欺骗各得
-
-    // 自动演化状态
-    QTimer* m_autoEvoTimer = nullptr;
-    int m_autoEvoTargetRound = 0;
-    bool m_autoEvoPaused = false;
-    int m_autoEvoPairI = 0;  // 步进模式：当前交互对索引
-    int m_autoEvoPairJ = 1;
-    bool m_autoEvoAdjustingRound = false;
-    bool m_autoEvoWaitingAdjust = false; // 等待折算步（延时 0.3s）
-    bool m_autoEvoFastMode = false;     // true=极速演化(一轮一帧) false=逐对演化
-    bool m_autoEvoSingleRound = false;  // 单轮模式，一轮后停止
-
-    // 支付矩阵（非静态，使用成员变量）
-    void calculateScores(int action1, int action2,
-                         int& score1, int& score2);
-
-    // 推进到下一个对手或下一个回合
+    // ---- 内部方法 ----
+    void runNPCRound();
     void advanceTurn();
-
-    // 自动演化单步
-    void autoEvoTick();
-    // 按比例折算积分
-    void adjustScores();
+    void applyEliminationIfDue();
 };
 
 #endif // GAMEENGINE_H

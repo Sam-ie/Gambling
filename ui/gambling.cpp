@@ -3,31 +3,53 @@
 #include "ui_welcome.h"
 #include "npccirclewidget.h"
 #include "numberpicker.h"
-#include <algorithm>
-#include <QMap>
+#include "spingroupcontroller.h"
+#include "presetmanager.h"
+#include "helptextbuilder.h"
+#include "../core/npc/npcfactory.h"
+
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollBar>
 #include <QScroller>
 #include <QSpacerItem>
+#include <QComboBox>
+#include <QApplication>
 
 Gambling::Gambling(QWidget* parent)
     : QMainWindow(parent)
     , ui(new Ui::Gambling)
     , m_engine(new GameEngine(this))
+    , m_spinController(new SpinGroupController(this))
+    , m_presetManager(new PresetManager(m_spinController, this))
 {
     ui->setupUi(this);
     setWindowState(Qt::WindowNoState);
 
-    // 修复所有 Label + NumberPicker 组合布局：label 左对齐，NumberPicker 右侧居中
+#ifdef Q_OS_ANDROID
+    // Android：移除 tabWidget 的 styleSheet，避免 QSS 触发暗色渲染（黑底白字）
+    ui->tabWidget->setStyleSheet(QString());
+    // 各 tab 页设 autoFillBackground，用 application palette 画亮色背景
+    for (int i = 0; i < ui->tabWidget->count(); ++i)
+        ui->tabWidget->widget(i)->setAutoFillBackground(true);
+    // tab 标签等宽：清除 stylesheet 后失去 min-width/padding 约束，
+    // Android 原生样式按文字长度计算 tab 宽度导致不等长
+    QTabBar* tb = ui->tabWidget->tabBar();
+    tb->setExpanding(true);
+    QFont tabFont = tb->font();
+    tabFont.setPointSize(14);
+    tb->setFont(tabFont);
+    tb->setStyleSheet("QTabBar::tab { height: 32px; min-width: 80px; padding: 0px 20px; }");
+#endif
+
+    // ---- 修复 Label + NumberPicker 布局 ----
     for (auto* np : findChildren<NumberPicker*>()) {
         QLayout* lay = np->parentWidget() ? np->parentWidget()->layout() : nullptr;
         auto* hlay = qobject_cast<QHBoxLayout*>(lay);
         if (!hlay) continue;
         int idx = hlay->indexOf(np);
         if (idx < 0) continue;
-        // label 不 expanding
         for (int i = 0; i < idx; ++i) {
             QLayoutItem* item = hlay->itemAt(i);
             if (!item) continue;
@@ -37,67 +59,61 @@ Gambling::Gambling(QWidget* parent)
                 lbl->setMinimumWidth(0);
             }
         }
-        // 在 label 和 NumberPicker 之间插入弹性空间，把 NP 推到右侧居中
         auto* midSpacer = new QSpacerItem(0, 0, QSizePolicy::Expanding, QSizePolicy::Minimum);
         hlay->insertItem(idx, midSpacer);
         hlay->setAlignment(np, Qt::AlignCenter);
     }
 
-    // Android 触摸滚动支持
+    // ---- Android 触摸滚动 ----
     QScroller::grabGesture(ui->textPlayerHistory->viewport(), QScroller::LeftMouseButtonGesture);
     QScroller::grabGesture(ui->textHelp->viewport(), QScroller::LeftMouseButtonGesture);
     QScroller::grabGesture(ui->lblGameInfo->viewport(), QScroller::LeftMouseButtonGesture);
 
-    // ---- QStackedWidget 在代码中构建 ----
+    // ---- QStackedWidget 欢迎/游戏页 ----
     QStackedWidget* stack = new QStackedWidget();
     QVBoxLayout* cl = qobject_cast<QVBoxLayout*>(ui->centralWidget->layout());
     cl->removeWidget(ui->tabWidget);
     stack->addWidget(ui->tabWidget);
     m_welcomePage = new QWidget();
-    Ui::Welcome welcomeUi;
-    welcomeUi.setupUi(m_welcomePage);
+    m_welcomeUi = new Ui::Welcome();
+    m_welcomeUi->setupUi(m_welcomePage);
+#ifdef Q_OS_ANDROID
+    m_welcomePage->setAutoFillBackground(true);
+#endif
     stack->insertWidget(0, m_welcomePage);
     cl->addWidget(stack);
     stack->setCurrentIndex(0);
 
-    connect(welcomeUi.btnStart, &QPushButton::clicked, [stack]() {
+    connect(m_welcomeUi->btnStart, &QPushButton::clicked, [stack]() {
         stack->setCurrentIndex(1);
     });
 
-    // ---- NPCCircleWidget 嵌入左侧容器 ----
+    // 语言切换
+    auto* comboLang = m_welcomePage->findChild<QComboBox*>("comboLanguage");
+    if (comboLang) {
+        comboLang->setMaxVisibleItems(6);
+        connect(comboLang, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, &Gambling::onLanguageChanged);
+    }
+
+    // ---- NPCCircleWidget ----
     QHBoxLayout* circleLayout = new QHBoxLayout(ui->circleContainer);
     circleLayout->setContentsMargins(0, 0, 0, 0);
     m_circleWidget = new NPCCircleWidget();
     circleLayout->addWidget(m_circleWidget);
 
-    // 圆心按钮信号
     connect(m_circleWidget, &NPCCircleWidget::startClicked,
             this, &Gambling::onStartClicked);
 
+    // ---- SpinGroupController ----
+    setupSpinController();
+    m_presetManager->apply(PresetManager::EASY);  // 默认简单模式
     setGameButtonsEnabled(false);
     setupTooltips();
     setupSettingsConnections();
-    // 帮助页初始显示 UI 文件中的静态文本，修改设置后才动态更新
 
-    // ---- 人数设置 SpinBox 信号 ----
-    auto connectCount = [this](NumberPicker* spin) {
-        connect(spin, &NumberPicker::valueChanged,
-                this, &Gambling::updateTotalPopulation);
-    };
-    connectCount(ui->spinHonestCount);
-    connectCount(ui->spinDeceptiveCount);
-    connectCount(ui->spinSwingerCount);
-    connectCount(ui->spinRepeaterCount);
-    connectCount(ui->spinReinforceCount);
-    connectCount(ui->spinForgivingCount);
-    connectCount(ui->spinGrudgerCount);
-    connectCount(ui->spinDetectiveCount);
-    connectCount(ui->spinPavlovCount);
-    connectCount(ui->spinMajorityCount);
-    connectCount(ui->spinPeriodicCount);
-    updateTotalPopulation();
-
-    // ---- 从设置页初始化引擎参数（构造时读一次） ----
+    // ---- 初始化引擎参数 ----
+    ui->comboCheatNpc->setMaxVisibleItems(6);
     m_engine->setScoreRules(
         ui->spinCooperateRwd->value(),
         ui->spinCheatRwd->value(),
@@ -109,161 +125,224 @@ Gambling::Gambling(QWidget* parent)
     m_engine->setScoreInheritRatio(ui->sliderScoreInherit->value());
 
     // ---- GameEngine 信号连接 ----
-    connect(m_engine, &GameEngine::gameStarted,       this, &Gambling::onGameStarted);
-    connect(m_engine, &GameEngine::gameFinished,      this, &Gambling::onGameFinished);
-    connect(m_engine, &GameEngine::roundChanged,      this, &Gambling::onRoundChanged);
-    connect(m_engine, &GameEngine::playerTurn,        this, &Gambling::onPlayerTurn);
-    connect(m_engine, &GameEngine::turnResult,        this, &Gambling::onTurnResult);
-    connect(m_engine, &GameEngine::allScoresUpdated,  this, &Gambling::onAllScoresUpdated);
-    connect(m_engine, &GameEngine::autoEvoStep,       this, &Gambling::onAutoEvoStep);
-    connect(m_engine, &GameEngine::autoEvoPairDone,   this, [this](int a, int b) {
-        m_circleWidget->highlightPair(a, b);
-    });
-    connect(m_engine, &GameEngine::autoEvoFinished,   this, &Gambling::onAutoEvoFinished);
+    connect(m_engine, &GameEngine::gameStarted,     this, &Gambling::onGameStarted);
+    connect(m_engine, &GameEngine::gameFinished,    this, &Gambling::onGameFinished);
+    connect(m_engine, &GameEngine::roundChanged,    this, &Gambling::onRoundChanged);
+    connect(m_engine, &GameEngine::playerTurn,      this, &Gambling::onPlayerTurn);
+    connect(m_engine, &GameEngine::turnResult,      this, &Gambling::onTurnResult);
+    connect(m_engine, &GameEngine::allScoresUpdated,this, &Gambling::onAllScoresUpdated);
+    // ---- AutoEvolutionEngine 信号直连（跳过 GameEngine 转发，避免信号-信号问题） ----
+    connect(&m_engine->evoEngine(), &AutoEvolutionEngine::step,
+            this, &Gambling::onAutoEvoStep);
+    connect(&m_engine->evoEngine(), &AutoEvolutionEngine::pairDone,
+            this, [this](int a, int b) { m_circleWidget->highlightPair(a, b); });
+    connect(&m_engine->evoEngine(), &AutoEvolutionEngine::finished,
+            this, &Gambling::onAutoEvoFinished);
 }
 
 Gambling::~Gambling()
 {
+    delete m_welcomeUi;
     delete ui;
+}
+
+// ============ SpinGroupController 注册 ============
+
+void Gambling::setupSpinController()
+{
+    m_spinController->registerSpin(NPCFactory::HONEST,        ui->spinHonestCount);
+    m_spinController->registerSpin(NPCFactory::DECEPTIVE,     ui->spinDeceptiveCount);
+    m_spinController->registerSpin(NPCFactory::SWINGER,       ui->spinSwingerCount);
+    m_spinController->registerSpin(NPCFactory::REPEATER,      ui->spinRepeaterCount);
+    m_spinController->registerSpin(NPCFactory::FORGIVING,     ui->spinForgivingCount);
+    m_spinController->registerSpin(NPCFactory::REINFORCEMENT, ui->spinReinforceCount);
+    m_spinController->registerSpin(NPCFactory::GRUDGER,       ui->spinGrudgerCount);
+    m_spinController->registerSpin(NPCFactory::DETECTIVE,     ui->spinDetectiveCount);
+    m_spinController->registerSpin(NPCFactory::PAVLOV,        ui->spinPavlovCount);
+    m_spinController->registerSpin(NPCFactory::MAJORITY,      ui->spinMajorityCount);
+    m_spinController->registerSpin(NPCFactory::PERIODIC,      ui->spinPeriodicCount);
+
+    connect(m_spinController, &SpinGroupController::totalChanged, this, [this](int total) {
+        ui->lblTotalCount->setText(QString::number(total));
+    });
+    m_spinController->totalChanged(m_spinController->totalCount());
 }
 
 // ============ Tooltip ============
 
 void Gambling::setupTooltips()
 {
-    ui->spinHonestCount->setToolTip("始终合作。善良但容易被剥削。");
-    ui->label->setToolTip(ui->spinHonestCount->toolTip());
-    ui->spinDeceptiveCount->setToolTip("始终欺骗。短期收益最高。");
-    ui->label_5->setToolTip(ui->spinDeceptiveCount->toolTip());
-    ui->spinSwingerCount->setToolTip("50% 概率随机选择，完全不可预测。");
-    ui->label_6->setToolTip(ui->spinSwingerCount->toolTip());
-    ui->spinRepeaterCount->setToolTip("\"以牙还牙\"。复制你上一轮的行为。");
-    ui->label_7->setToolTip(ui->spinRepeaterCount->toolTip());
-    ui->spinForgivingCount->setToolTip("\"两错才罚\"。连续两次被欺骗才报复。");
-    ui->label_9->setToolTip(ui->spinForgivingCount->toolTip());
-    ui->spinReinforceCount->setToolTip("ε-greedy 强化学习，根据历史选择最优应对。");
-    ui->label_8->setToolTip(ui->spinReinforceCount->toolTip());
+    struct TTip { QWidget* w; QString text; };
+    const QVector<TTip> tips = {
+        {ui->spinHonestCount,   tr("始终合作。善良但容易被剥削。")},
+        {ui->lblHonestCount,    tr("始终合作。善良但容易被剥削。")},
+        {ui->spinDeceptiveCount,tr("始终欺骗。短期收益最高。")},
+        {ui->lblDeceptiveCount, tr("始终欺骗。短期收益最高。")},
+        {ui->spinSwingerCount,  tr("50% 概率随机选择，完全不可预测。")},
+        {ui->lblSwingerCount,   tr("50% 概率随机选择，完全不可预测。")},
+        {ui->spinRepeaterCount, tr("\"以牙还牙\"。复制你上一轮的行为。")},
+        {ui->lblRepeaterCount,  tr("\"以牙还牙\"。复制你上一轮的行为。")},
+        {ui->spinForgivingCount,tr("\"两错才罚\"。连续两次被欺骗才报复。")},
+        {ui->lblForgivingCount, tr("\"两错才罚\"。连续两次被欺骗才报复。")},
+        {ui->spinReinforceCount,tr("ε-greedy 强化学习，根据历史选择最优应对。")},
+        {ui->lblReinforceCount, tr("ε-greedy 强化学习，根据历史选择最优应对。")},
+        {ui->spinGrudgerCount,  tr("一旦被背叛则永不原谅该对手，始终背叛报复。")},
+        {ui->lblGrudgerCount,   tr("一旦被背叛则永不原谅该对手，始终背叛报复。")},
+        {ui->spinDetectiveCount,tr("前4轮试探对手：合作→背叛→合作→合作；对手背叛过则转TFT，否则一直背叛。")},
+        {ui->lblDetectiveCount, tr("前4轮试探对手：合作→背叛→合作→合作；对手背叛过则转TFT，否则一直背叛。")},
+        {ui->spinPavlovCount,   tr("\"趋利避害\"：上一轮双方同则合作，异则背叛。")},
+        {ui->lblPavlovCount,    tr("\"趋利避害\"：上一轮双方同则合作，异则背叛。")},
+        {ui->spinMajorityCount, tr("统计对手多数行为并跟随，平局则合作。")},
+        {ui->lblMajorityCount,  tr("统计对手多数行为并跟随，平局则合作。")},
+        {ui->spinPeriodicCount, tr("固定周期循环：合作→背叛→背叛→合作→重复。")},
+        {ui->lblPeriodicCount,  tr("固定周期循环：合作→背叛→背叛→合作→重复。")},
+        {ui->btnHonest,         tr("双方合作各得奖励分。对方背叛你得被背叛分。")},
+        {ui->btnCheat,          tr("你背叛对方：对方合作你得背叛分，对方也背叛得双方背叛分。")},
+        {ui->spinRounds,        tr("玩家游戏的总回合数。自动演化回合数在游戏页设置。")},
+    };
+    for (const auto& t : tips) t.w->setToolTip(t.text);
 
-    ui->spinGrudgerCount->setToolTip("一旦被背叛则永不原谅该对手，始终背叛报复。");
-    ui->label_11->setToolTip(ui->spinGrudgerCount->toolTip());
-    ui->spinDetectiveCount->setToolTip("前4轮试探对手：合作→背叛→合作→合作；对手背叛过则转TFT，否则一直背叛。");
-    ui->label_12->setToolTip(ui->spinDetectiveCount->toolTip());
-    ui->spinPavlovCount->setToolTip("\"趋利避害\"：上一轮双方同则合作，异则背叛。");
-    ui->label_13->setToolTip(ui->spinPavlovCount->toolTip());
-    ui->spinMajorityCount->setToolTip("统计对手多数行为并跟随，平局则合作。");
-    ui->label_14->setToolTip(ui->spinMajorityCount->toolTip());
-    ui->spinPeriodicCount->setToolTip("固定周期循环：合作→背叛→背叛→合作→重复。");
-    ui->label_15->setToolTip(ui->spinPeriodicCount->toolTip());
+    const QString elimTt = tr("每 N 回合淘汰最低分 NPC，再由高分 NPC 克隆替代。");
+    ui->lblElimination->setToolTip(elimTt);
+    ui->spinElimination->setToolTip(elimTt);
+    ui->spinElimCount->setToolTip(tr("每次淘汰的人数（非百分比）。"));
 
-    ui->btnHonest->setToolTip("双方合作各得奖励分。对方背叛你得被背叛分。");
-    ui->btnCheat->setToolTip("你背叛对方：对方合作你得背叛分，对方也背叛得双方背叛分。");
-    ui->spinRounds->setToolTip("玩家游戏的总回合数。自动演化回合数在游戏页设置。");
+    const QString inheritTt = tr("克隆出的新 NPC 是否继承原体的交互历史记录。");
+    ui->lblInheritHistory->setToolTip(inheritTt);
+    ui->chkInheritHistory->setToolTip(inheritTt);
 
-    // 设置页标签
-    ui->lblElimination->setToolTip("每 N 回合淘汰最低分 NPC，再由高分 NPC 克隆替代。");
-    ui->spinElimination->setToolTip(ui->lblElimination->toolTip());
-    ui->spinElimCount->setToolTip("每次淘汰的人数（非百分比）。");
-    ui->lblInheritHistory->setToolTip("克隆出的新 NPC 是否继承原体的交互历史记录。");
-    ui->chkInheritHistory->setToolTip(ui->lblInheritHistory->toolTip());
-    ui->lblScoreInherit->setToolTip("每轮结束后按比例折算 NPC 积分（向下取整）。0%=每轮重新计分，100%=全部继承。");
-    ui->sliderScoreInherit->setToolTip(ui->lblScoreInherit->toolTip());
-    ui->lblScoreInheritVal->setToolTip(ui->lblScoreInherit->toolTip());
-    ui->lblHideLabels->setToolTip("隐藏一定比例 NPC 的类型标签，增加游戏难度和趣味性。");
-    ui->chkHideLabels->setToolTip(ui->lblHideLabels->toolTip());
-    ui->sliderHideLabels->setToolTip("要隐藏的类型标签百分比。0%=全部显示，100%=全部隐藏。");
-    ui->lblHideLabelsPct->setToolTip(ui->sliderHideLabels->toolTip());
-    ui->lblErrorRate->setToolTip("NPC 犯错概率。每个决策有该概率随机反转。");
-    ui->sliderErrorRate->setToolTip(ui->lblErrorRate->toolTip());
-    ui->lblErrorRateVal->setToolTip(ui->lblErrorRate->toolTip());
+    const QString scoreTt = tr("每轮结束后按比例折算 NPC 积分（向下取整）。0%=每轮重新计分，100%=全部继承。");
+    ui->lblScoreInherit->setToolTip(scoreTt);
+    ui->sliderScoreInherit->setToolTip(scoreTt);
+    ui->lblScoreInheritVal->setToolTip(scoreTt);
 
-    // 积分规则标签
-    ui->lblCooperateRwd->setToolTip("双方合作时的奖励分（R）。");
-    ui->spinCooperateRwd->setToolTip(ui->lblCooperateRwd->toolTip());
-    ui->lblCheatRwd->setToolTip("一方背叛、对方合作时，背叛方的得分（T）。");
-    ui->spinCheatRwd->setToolTip(ui->lblCheatRwd->toolTip());
-    ui->lblBetrayedPnl->setToolTip("一方合作、对方背叛时，合作方的得分（S）。");
-    ui->spinBetrayedPnl->setToolTip(ui->lblBetrayedPnl->toolTip());
-    ui->lblBothCheat->setToolTip("双方都背叛时的惩罚分（P）。");
-    ui->spinBothCheat->setToolTip(ui->lblBothCheat->toolTip());
+    const QString hideTt = tr("隐藏一定比例 NPC 的类型标签，增加游戏难度和趣味性。");
+    ui->lblHideLabels->setToolTip(hideTt);
+    ui->chkHideLabels->setToolTip(hideTt);
+    ui->sliderHideLabels->setToolTip(tr("要隐藏的类型标签百分比。0%=全部显示，100%=全部隐藏。"));
+    ui->lblHideLabelsPct->setToolTip(tr("要隐藏的类型标签百分比。0%=全部显示，100%=全部隐藏。"));
 
-    ui->lblCheatNpc->setToolTip("选择要修改分数的 NPC。");
-    ui->comboCheatNpc->setToolTip(ui->lblCheatNpc->toolTip());
-    ui->spinCheatScore->setToolTip("设置该 NPC 的新分数。");
-    ui->btnCheatPanel->setToolTip("将选定 NPC 的分数设为指定值。");
-    ui->spinAutoEvo->setToolTip("自动演化的总回合数。");
-    ui->btnEvoStart->setToolTip("开始自动演化（连续运行）。");
-    ui->btnEvoFast->setToolTip("极速演化：每0.05秒一整轮，无停顿。");
-    ui->btnEvoStep->setToolTip("执行一对 NPC 交互。未开始时自动启动并暂停。");
-    ui->btnEvoRound->setToolTip("执行一整轮 NPC 交互。未开始时自动启动并暂停。");
+    const QString errorTt = tr("NPC 犯错概率。每个决策有该概率随机反转。");
+    ui->lblErrorRate->setToolTip(errorTt);
+    ui->sliderErrorRate->setToolTip(errorTt);
+    ui->lblErrorRateVal->setToolTip(errorTt);
+
+    const QString payoffTt[] = {
+        tr("双方合作时的奖励分（R）。"), tr("一方背叛、对方合作时，背叛方的得分（T）。"),
+        tr("一方合作、对方背叛时，合作方的得分（S）。"), tr("双方都背叛时的惩罚分（P）。")
+    };
+    ui->lblCooperateRwd->setToolTip(payoffTt[0]);
+    ui->spinCooperateRwd->setToolTip(payoffTt[0]);
+    ui->lblCheatRwd->setToolTip(payoffTt[1]);
+    ui->spinCheatRwd->setToolTip(payoffTt[1]);
+    ui->lblBetrayedPnl->setToolTip(payoffTt[2]);
+    ui->spinBetrayedPnl->setToolTip(payoffTt[2]);
+    ui->lblBothCheat->setToolTip(payoffTt[3]);
+    ui->spinBothCheat->setToolTip(payoffTt[3]);
+
+    ui->lblCheatNpc->setToolTip(tr("选择要修改分数的 NPC。"));
+    ui->comboCheatNpc->setToolTip(tr("选择要修改分数的 NPC。"));
+    ui->spinCheatScore->setToolTip(tr("设置该 NPC 的新分数。"));
+    ui->btnCheatPanel->setToolTip(tr("将选定 NPC 的分数设为指定值。"));
+    ui->spinAutoEvo->setToolTip(tr("自动演化的总回合数。"));
+    ui->btnEvoStart->setToolTip(tr("开始自动演化（连续运行）。"));
+    ui->btnEvoFast->setToolTip(tr("极速演化：每0.05秒一整轮，无停顿。"));
+    ui->btnEvoStep->setToolTip(tr("执行一对 NPC 交互。未开始时自动启动并暂停。"));
+    ui->btnEvoRound->setToolTip(tr("执行一整轮 NPC 交互。未开始时自动启动并暂停。"));
+}
+
+// ============ 设置页信号 ============
+
+void Gambling::setupSettingsConnections()
+{
+    ui->errorRateLayout->setAlignment(ui->sliderErrorRate, Qt::AlignVCenter);
+    ui->hideLabelsLayout->setAlignment(ui->sliderHideLabels, Qt::AlignVCenter);
+
+    connect(ui->spinRounds, &NumberPicker::valueChanged,
+            this, [this](int v){ m_setRounds = v; });
+
+    connect(ui->spinElimination, &NumberPicker::valueChanged,
+            this, [this](int v){ m_engine->setEliminationInterval(v); updateHelpText(); });
+    connect(ui->spinElimCount, &NumberPicker::valueChanged,
+            this, [this](int v){ m_engine->setEliminationCount(v); updateHelpText(); });
+
+    connect(ui->sliderErrorRate, &QSlider::valueChanged, this, [this](int v) {
+        ui->lblErrorRateVal->setText(QString("%1%").arg(v));
+        m_engine->setErrorRate(v / 100.0);
+        updateHelpText();
+    });
+
+    connect(ui->chkInheritHistory, &QCheckBox::toggled, this, [this](bool chk) {
+        m_engine->setInheritHistory(chk);
+        updateHelpText();
+    });
+    m_engine->setInheritHistory(ui->chkInheritHistory->isChecked());
+
+    connect(ui->sliderScoreInherit, &QSlider::valueChanged, this, [this](int v) {
+        ui->lblScoreInheritVal->setText(QString("%1%").arg(v));
+        m_engine->setScoreInheritRatio(v);
+        updateHelpText();
+    });
+    ui->scoreInheritLayout->setAlignment(ui->sliderScoreInherit, Qt::AlignVCenter);
+
+    connect(ui->chkHideLabels, &QCheckBox::toggled, this, [this](bool chk) {
+        ui->sliderHideLabels->setEnabled(chk);
+        ui->lblHideLabelsPct->setEnabled(chk);
+        m_circleWidget->setHideLabelsPct(chk ? ui->sliderHideLabels->value() : 0);
+    });
+    connect(ui->sliderHideLabels, &QSlider::valueChanged, this, [this](int v) {
+        ui->lblHideLabelsPct->setText(QString("%1%").arg(v));
+        if (ui->chkHideLabels->isChecked()) m_circleWidget->setHideLabelsPct(v);
+    });
+
+    auto applyScoreRules = [this]() {
+        m_engine->setScoreRules(
+            ui->spinCooperateRwd->value(), ui->spinCheatRwd->value(),
+            ui->spinBetrayedPnl->value(), ui->spinBothCheat->value());
+        updateHelpText();
+    };
+    connect(ui->spinCooperateRwd, &NumberPicker::valueChanged, this, applyScoreRules);
+    connect(ui->spinCheatRwd,     &NumberPicker::valueChanged, this, applyScoreRules);
+    connect(ui->spinBetrayedPnl,  &NumberPicker::valueChanged, this, applyScoreRules);
+    connect(ui->spinBothCheat,    &NumberPicker::valueChanged, this, applyScoreRules);
 }
 
 // ============ 圆心按钮 ============
 
 void Gambling::onStartClicked()
 {
-    // 游戏运行中 → 重置
     if (m_engine->phase() != GameEngine::IDLE || m_engine->autoEvoActive()) {
-        onResetClicked();
+        resetUI();
         return;
     }
 
-    // 闲置状态 → 启动玩家对战
-    int hc = ui->spinHonestCount->value(), dc = ui->spinDeceptiveCount->value();
-    int sc = ui->spinSwingerCount->value(), rc = ui->spinRepeaterCount->value();
-    int fc = ui->spinForgivingCount->value(), ic = ui->spinReinforceCount->value();
-    int gc = ui->spinGrudgerCount->value(), tc = ui->spinDetectiveCount->value();
-    int pc = ui->spinPavlovCount->value(), mc = ui->spinMajorityCount->value();
-    int nc = ui->spinPeriodicCount->value();
-    if (hc + dc + sc + rc + fc + ic + gc + tc + pc + mc + nc == 0) return;
+    NPCConfig config = m_spinController->buildConfig();
+    if (config.isEmpty()) return;
 
-    ui->spinHonestCount->setEnabled(false);
-    ui->spinDeceptiveCount->setEnabled(false);
-    ui->spinSwingerCount->setEnabled(false);
-    ui->spinRepeaterCount->setEnabled(false);
-    ui->spinReinforceCount->setEnabled(false);
-    ui->spinForgivingCount->setEnabled(false);
-    ui->spinGrudgerCount->setEnabled(false);
-    ui->spinDetectiveCount->setEnabled(false);
-    ui->spinPavlovCount->setEnabled(false);
-    ui->spinMajorityCount->setEnabled(false);
-    ui->spinPeriodicCount->setEnabled(false);
-    setGameButtonsEnabled(true);  // 启用诚实/欺骗按钮
-
-    // 切换到玩家模式：隐藏自动演化控件，显示历史文本框
+    m_spinController->setAllEnabled(false);
+    setGameButtonsEnabled(true);
     setPlayerMode(true);
-
     resetStats();
-    m_engine->initializeNPCs(hc, dc, sc, rc, fc, ic, gc, tc, pc, mc, nc);
+
+    m_engine->initializeNPCs(config);
     m_engine->setTotalRounds(m_setRounds);
     m_engine->startGame(m_setRounds);
 }
 
-void Gambling::onResetClicked()
+void Gambling::resetUI()
 {
     m_engine->stopAutoEvolution();
     m_engine->resetGame();
 
-    ui->spinHonestCount->setEnabled(true);
-    ui->spinDeceptiveCount->setEnabled(true);
-    ui->spinSwingerCount->setEnabled(true);
-    ui->spinRepeaterCount->setEnabled(true);
-    ui->spinReinforceCount->setEnabled(true);
-    ui->spinForgivingCount->setEnabled(true);
-    ui->spinGrudgerCount->setEnabled(true);
-    ui->spinDetectiveCount->setEnabled(true);
-    ui->spinPavlovCount->setEnabled(true);
-    ui->spinMajorityCount->setEnabled(true);
-    ui->spinPeriodicCount->setEnabled(true);
-
+    m_spinController->setAllEnabled(true);
     setGameButtonsEnabled(false);
-    setPlayerMode(false);  // 恢复自动演化控件
+    setPlayerMode(false);
 
-    // 恢复对战操作区显示
     ui->lblOpponent->setVisible(true);
     ui->btnHonest->setVisible(true);
     ui->btnCheat->setVisible(true);
 
-    updateTotalPopulation();
+    m_spinController->totalChanged(m_spinController->totalCount());
     resetStats();
     m_circleWidget->setGameRunning(false);
     m_circleWidget->setNPCData(QVector<NPCScoreInfo>());
@@ -271,13 +350,13 @@ void Gambling::onResetClicked()
     ui->lblGameInfo->setPlainText("已重置");
 
     ui->btnEvoStart->setEnabled(true);
-    ui->btnEvoStart->setText("开始");
+    setEvoBtnState(EVO_IDLE);
     ui->btnEvoFast->setEnabled(true);
     ui->btnEvoStep->setEnabled(true);
     ui->btnEvoRound->setEnabled(true);
 }
 
-// ============ 游戏操作按钮 ============
+// ============ 游戏操作 ============
 
 void Gambling::on_btnHonest_clicked()
 {
@@ -299,55 +378,45 @@ void Gambling::on_btnCheat_clicked()
 
 void Gambling::on_btnEvoStart_clicked()
 {
-    // 三重状态：开始 → 暂停 → 继续
-    QString text = ui->btnEvoStart->text();
-    if (text == "开始") {
+    switch (m_evoBtnState) {
+    case EVO_IDLE: {
         auto ph = m_engine->phase();
         if (ph == GameEngine::NPC_INTERACTION || ph == GameEngine::WAITING_FOR_PLAYER) return;
 
-        int hc = ui->spinHonestCount->value(), dc = ui->spinDeceptiveCount->value();
-        int sc = ui->spinSwingerCount->value(), rc = ui->spinRepeaterCount->value();
-        int fc = ui->spinForgivingCount->value(), ic = ui->spinReinforceCount->value();
-        int gc = ui->spinGrudgerCount->value(), tc = ui->spinDetectiveCount->value();
-        int pc = ui->spinPavlovCount->value(), mc = ui->spinMajorityCount->value();
-        int nc = ui->spinPeriodicCount->value();
-        if (hc + dc + sc + rc + fc + ic + gc + tc + pc + mc + nc == 0) return;
+        NPCConfig config = m_spinController->buildConfig();
+        if (config.isEmpty()) return;
         int rs = ui->spinAutoEvo->value();
 
-        ui->spinHonestCount->setEnabled(false);
-        ui->spinDeceptiveCount->setEnabled(false);
-        ui->spinSwingerCount->setEnabled(false);
-        ui->spinRepeaterCount->setEnabled(false);
-        ui->spinReinforceCount->setEnabled(false);
-        ui->spinForgivingCount->setEnabled(false);
-        ui->spinGrudgerCount->setEnabled(false);
-        ui->spinDetectiveCount->setEnabled(false);
-        ui->spinPavlovCount->setEnabled(false);
-        ui->spinMajorityCount->setEnabled(false);
-        ui->spinPeriodicCount->setEnabled(false);
+        m_engine->initializeNPCs(config);
+        m_engine->setTotalRounds(rs);
+
+        m_spinController->setAllEnabled(false);
         setGameButtonsEnabled(false);
 
-        ui->btnEvoStart->setText("暂停");
+        setEvoBtnState(EVO_RUNNING);
         ui->btnEvoFast->setEnabled(false);
         ui->btnEvoStep->setEnabled(false);
         ui->btnEvoRound->setEnabled(false);
 
         m_circleWidget->setGameRunning(true);
-        ui->lblGameInfo->setPlainText(QString("自动演化 %1 回合").arg(rs));
+        ui->lblGameInfo->setPlainText(tr("自动演化 %1 回合").arg(rs));
         updateOpponentDisplay("", "");
 
-        m_engine->setTotalRounds(rs);
-        m_engine->startAutoEvolution(rs, hc, dc, sc, rc, fc, ic, gc, tc, pc, mc, nc);
-    } else if (text == "暂停") {
+        m_engine->startAutoEvolution(rs, true);
+        break;
+    }
+    case EVO_RUNNING:
         m_engine->pauseAutoEvolution();
-        ui->btnEvoStart->setText("继续");
+        setEvoBtnState(EVO_PAUSED);
         ui->btnEvoStep->setEnabled(true);
         ui->btnEvoRound->setEnabled(true);
-    } else { // 继续
+        break;
+    case EVO_PAUSED:
         m_engine->resumeAutoEvolution();
-        ui->btnEvoStart->setText("暂停");
+        setEvoBtnState(EVO_RUNNING);
         ui->btnEvoStep->setEnabled(false);
         ui->btnEvoRound->setEnabled(false);
+        break;
     }
 }
 
@@ -356,24 +425,17 @@ void Gambling::on_btnEvoFast_clicked()
     auto ph = m_engine->phase();
     if (ph == GameEngine::NPC_INTERACTION || ph == GameEngine::WAITING_FOR_PLAYER) return;
 
-    int hc = ui->spinHonestCount->value(), dc = ui->spinDeceptiveCount->value();
-    int sc = ui->spinSwingerCount->value(), rc = ui->spinRepeaterCount->value();
-    int fc = ui->spinForgivingCount->value(), ic = ui->spinReinforceCount->value();
-    int gc = ui->spinGrudgerCount->value(), tc = ui->spinDetectiveCount->value();
-    int pc = ui->spinPavlovCount->value(), mc = ui->spinMajorityCount->value();
-    int nc = ui->spinPeriodicCount->value();
-    if (hc + dc + sc + rc + fc + ic + gc + tc + pc + mc + nc == 0) return;
+    NPCConfig config = m_spinController->buildConfig();
+    if (config.isEmpty()) return;
     int rs = ui->spinAutoEvo->value();
 
-    ui->spinHonestCount->setEnabled(false);
-    ui->spinDeceptiveCount->setEnabled(false);
-    ui->spinSwingerCount->setEnabled(false);
-    ui->spinRepeaterCount->setEnabled(false);
-    ui->spinReinforceCount->setEnabled(false);
-    ui->spinForgivingCount->setEnabled(false);
+    m_engine->initializeNPCs(config);
+    m_engine->setTotalRounds(rs);
+
+    m_spinController->setAllEnabled(false);
     setGameButtonsEnabled(false);
 
-    ui->btnEvoStart->setText("暂停");
+    setEvoBtnState(EVO_RUNNING);
     ui->btnEvoFast->setEnabled(false);
     ui->btnEvoStep->setEnabled(false);
     ui->btnEvoRound->setEnabled(false);
@@ -382,8 +444,7 @@ void Gambling::on_btnEvoFast_clicked()
     ui->lblGameInfo->setPlainText(QString("极速演化 %1 回合").arg(rs));
     updateOpponentDisplay("", "");
 
-    m_engine->setTotalRounds(rs);
-    m_engine->startAutoEvolution(rs, hc, dc, sc, rc, fc, ic, gc, tc, pc, mc, nc);
+    m_engine->startAutoEvolution(rs, true);
     m_engine->startAutoEvolutionFast();
 }
 
@@ -392,7 +453,7 @@ void Gambling::on_btnEvoStep_clicked()
     if (!m_engine->autoEvoActive()) {
         initAutoEvolution();
         m_engine->pauseAutoEvolution();
-        ui->btnEvoStart->setText("继续");
+        setEvoBtnState(EVO_PAUSED);
         ui->btnEvoStep->setEnabled(true);
         ui->btnEvoRound->setEnabled(true);
     }
@@ -403,37 +464,23 @@ void Gambling::on_btnEvoRound_clicked()
 {
     if (!m_engine->autoEvoActive()) {
         initAutoEvolution();
-        ui->btnEvoStart->setText("继续");
+        setEvoBtnState(EVO_PAUSED);
         ui->btnEvoStep->setEnabled(true);
         ui->btnEvoRound->setEnabled(true);
     }
     m_engine->stepAutoEvolution();
 }
 
-// ============ 自动演化初始化 ============
-
 void Gambling::initAutoEvolution()
 {
-    int hc = ui->spinHonestCount->value(), dc = ui->spinDeceptiveCount->value();
-    int sc = ui->spinSwingerCount->value(), rc = ui->spinRepeaterCount->value();
-    int fc = ui->spinForgivingCount->value(), ic = ui->spinReinforceCount->value();
-    int gc = ui->spinGrudgerCount->value(), tc = ui->spinDetectiveCount->value();
-    int pc = ui->spinPavlovCount->value(), mc = ui->spinMajorityCount->value();
-    int nc = ui->spinPeriodicCount->value();
-    if (hc + dc + sc + rc + fc + ic + gc + tc + pc + mc + nc == 0) return;
+    NPCConfig config = m_spinController->buildConfig();
+    if (config.isEmpty()) return;
     int rs = ui->spinAutoEvo->value();
 
-    ui->spinHonestCount->setEnabled(false);
-    ui->spinDeceptiveCount->setEnabled(false);
-    ui->spinSwingerCount->setEnabled(false);
-    ui->spinRepeaterCount->setEnabled(false);
-    ui->spinReinforceCount->setEnabled(false);
-    ui->spinForgivingCount->setEnabled(false);
-    ui->spinGrudgerCount->setEnabled(false);
-    ui->spinDetectiveCount->setEnabled(false);
-    ui->spinPavlovCount->setEnabled(false);
-    ui->spinMajorityCount->setEnabled(false);
-    ui->spinPeriodicCount->setEnabled(false);
+    m_engine->initializeNPCs(config);
+    m_engine->setTotalRounds(rs);
+
+    m_spinController->setAllEnabled(false);
     setGameButtonsEnabled(false);
 
     ui->btnEvoStart->setEnabled(false);
@@ -443,88 +490,15 @@ void Gambling::initAutoEvolution()
     ui->lblGameInfo->setPlainText(QString("自动演化 %1 回合").arg(rs));
     updateOpponentDisplay("", "");
 
-    m_engine->setTotalRounds(rs);
-    m_engine->startAutoEvolution(rs, hc, dc, sc, rc, fc, ic, gc, tc, pc, mc, nc, false);
+    m_engine->startAutoEvolution(rs, false);
 }
 
-// ============ 人数设置 ============
+// ============ 预设 ============
 
-void Gambling::updateTotalPopulation()
-{
-    int total = ui->spinHonestCount->value() + ui->spinDeceptiveCount->value()
-              + ui->spinSwingerCount->value() + ui->spinRepeaterCount->value()
-              + ui->spinReinforceCount->value() + ui->spinForgivingCount->value()
-              + ui->spinGrudgerCount->value() + ui->spinDetectiveCount->value()
-              + ui->spinPavlovCount->value() + ui->spinMajorityCount->value()
-              + ui->spinPeriodicCount->value();
-    ui->lblTotalCount->setText(QString::number(total));
-}
-
-// ============ 预设人数配置 ============
-
-void Gambling::on_btnPresetEasy_clicked()
-{
-    // 简单模式：仅4种基础类型，各2个，共8个 NPC
-    ui->spinHonestCount->setValue(2);
-    ui->spinDeceptiveCount->setValue(2);
-    ui->spinSwingerCount->setValue(2);
-    ui->spinRepeaterCount->setValue(2);
-    ui->spinForgivingCount->setValue(0);
-    ui->spinReinforceCount->setValue(0);
-    ui->spinGrudgerCount->setValue(0);
-    ui->spinDetectiveCount->setValue(0);
-    ui->spinPavlovCount->setValue(0);
-    ui->spinMajorityCount->setValue(0);
-    ui->spinPeriodicCount->setValue(0);
-}
-
-void Gambling::on_btnPresetNormal_clicked()
-{
-    // 普通模式：全部11种策略各1个，共11个 NPC
-    ui->spinHonestCount->setValue(1);
-    ui->spinDeceptiveCount->setValue(1);
-    ui->spinSwingerCount->setValue(1);
-    ui->spinRepeaterCount->setValue(1);
-    ui->spinForgivingCount->setValue(1);
-    ui->spinReinforceCount->setValue(1);
-    ui->spinGrudgerCount->setValue(1);
-    ui->spinDetectiveCount->setValue(1);
-    ui->spinPavlovCount->setValue(1);
-    ui->spinMajorityCount->setValue(1);
-    ui->spinPeriodicCount->setValue(1);
-}
-
-void Gambling::on_btnPresetHard_clicked()
-{
-    // 困难模式：攻击型策略更多，共13个 NPC
-    ui->spinHonestCount->setValue(1);
-    ui->spinDeceptiveCount->setValue(2);
-    ui->spinSwingerCount->setValue(1);
-    ui->spinRepeaterCount->setValue(1);
-    ui->spinForgivingCount->setValue(1);
-    ui->spinReinforceCount->setValue(1);
-    ui->spinGrudgerCount->setValue(2);
-    ui->spinDetectiveCount->setValue(1);
-    ui->spinPavlovCount->setValue(1);
-    ui->spinMajorityCount->setValue(1);
-    ui->spinPeriodicCount->setValue(1);
-}
-
-void Gambling::on_btnPresetClassic_clicked()
-{
-    // 经典模式：Axelrod 经典策略组合，共7个 NPC
-    ui->spinHonestCount->setValue(2);
-    ui->spinDeceptiveCount->setValue(1);
-    ui->spinSwingerCount->setValue(1);
-    ui->spinRepeaterCount->setValue(2);
-    ui->spinForgivingCount->setValue(1);
-    ui->spinReinforceCount->setValue(0);
-    ui->spinGrudgerCount->setValue(0);
-    ui->spinDetectiveCount->setValue(0);
-    ui->spinPavlovCount->setValue(0);
-    ui->spinMajorityCount->setValue(0);
-    ui->spinPeriodicCount->setValue(0);
-}
+void Gambling::on_btnPresetEasy_clicked()    { m_presetManager->apply(PresetManager::EASY); }
+void Gambling::on_btnPresetNormal_clicked()  { m_presetManager->apply(PresetManager::NORMAL); }
+void Gambling::on_btnPresetHard_clicked()    { m_presetManager->apply(PresetManager::HARD); }
+void Gambling::on_btnPresetClassic_clicked() { m_presetManager->apply(PresetManager::CLASSIC); }
 
 // ============ GameEngine 信号处理 ============
 
@@ -540,11 +514,10 @@ void Gambling::onGameStarted()
 void Gambling::onGameFinished(int finalScore)
 {
     setGameButtonsEnabled(false);
-    setPlayerMode(false);  // 隐藏自动演化控件
+    setPlayerMode(false);
     m_circleWidget->setGameRunning(false);
     updateScoreDisplay();
 
-    // 隐藏对战操作区，显示结算报告
     ui->lblOpponent->setVisible(false);
     ui->btnHonest->setVisible(false);
     ui->btnCheat->setVisible(false);
@@ -553,17 +526,7 @@ void Gambling::onGameFinished(int finalScore)
     ui->textPlayerHistory->setVisible(true);
     ui->textPlayerHistory->setHtml(report);
 
-    ui->spinHonestCount->setEnabled(true);
-    ui->spinDeceptiveCount->setEnabled(true);
-    ui->spinSwingerCount->setEnabled(true);
-    ui->spinRepeaterCount->setEnabled(true);
-    ui->spinReinforceCount->setEnabled(true);
-    ui->spinForgivingCount->setEnabled(true);
-    ui->spinGrudgerCount->setEnabled(true);
-    ui->spinDetectiveCount->setEnabled(true);
-    ui->spinPavlovCount->setEnabled(true);
-    ui->spinMajorityCount->setEnabled(true);
-    ui->spinPeriodicCount->setEnabled(true);
+    m_spinController->setAllEnabled(true);
 }
 
 void Gambling::onRoundChanged(int currentRound, int totalRounds)
@@ -573,7 +536,7 @@ void Gambling::onRoundChanged(int currentRound, int totalRounds)
 }
 
 void Gambling::onPlayerTurn(int opponentId, const QString& name,
-                             const QString& strategy)
+                              const QString& strategy)
 {
     Q_UNUSED(opponentId);
     m_currentOpponentStrategy = strategy;
@@ -631,8 +594,6 @@ void Gambling::onTurnResult(int opponentId, const QString& name,
 
     updateScoreDisplay();
     updateOpponentDisplay(name, m_currentOpponentStrategy);
-
-    // 刷新历史显示
     showPlayerHistory(opponentId, name);
 }
 
@@ -642,96 +603,18 @@ void Gambling::onAllScoresUpdated(const QVector<NPCScoreInfo>& rankings)
     m_circleWidget->setRoundInfo(m_engine->currentRound(), m_engine->totalRounds());
     m_circleWidget->setPlayerScore(m_engine->playerScore());
     updateScoreDisplay();
-
-    ui->comboCheatNpc->clear();
-    for (const auto& n : m_engine->npcs()) {
-        ui->comboCheatNpc->addItem(QString("%1 [%2]").arg(n->getName()).arg(n->getStrategyType()));
-    }
-}
-
-// ============ 设置页控件信号 ============
-
-void Gambling::setupSettingsConnections()
-{
-    // 失误率/隐藏标签 滑块垂直居中
-    ui->errorRateLayout->setAlignment(ui->sliderErrorRate, Qt::AlignVCenter);
-    ui->hideLabelsLayout->setAlignment(ui->sliderHideLabels, Qt::AlignVCenter);
-
-    connect(ui->spinRounds, &NumberPicker::valueChanged,
-            this, [this](int v){ m_setRounds = v; });
-    connect(ui->spinElimination, &NumberPicker::valueChanged,
-            this, [this](int v){ m_engine->setEliminationInterval(v); updateHelpText(); });
-    connect(ui->spinElimCount, &NumberPicker::valueChanged,
-            this, [this](int v){ m_engine->setEliminationCount(v); updateHelpText(); });
-    connect(ui->sliderErrorRate, &QSlider::valueChanged,
-            this, [this](int v){
-        ui->lblErrorRateVal->setText(QString("%1%").arg(v));
-        m_engine->setErrorRate(v / 100.0); updateHelpText();
-    });
-
-    // 继承历史
-    connect(ui->chkInheritHistory, &QCheckBox::toggled,
-            this, [this](bool chk){ m_engine->setInheritHistory(chk); updateHelpText(); });
-    m_engine->setInheritHistory(ui->chkInheritHistory->isChecked());
-
-    // 资产继承
-    connect(ui->sliderScoreInherit, &QSlider::valueChanged,
-            this, [this](int v){
-        ui->lblScoreInheritVal->setText(QString("%1%").arg(v));
-        m_engine->setScoreInheritRatio(v); updateHelpText();
-    });
-    ui->scoreInheritLayout->setAlignment(ui->sliderScoreInherit, Qt::AlignVCenter);
-
-    // 随机匿名
-    connect(ui->chkHideLabels, &QCheckBox::toggled, this, [this](bool chk) {
-        ui->sliderHideLabels->setEnabled(chk);
-        ui->lblHideLabelsPct->setEnabled(chk);
-        m_circleWidget->setHideLabelsPct(chk ? ui->sliderHideLabels->value() : 0);
-    });
-    connect(ui->sliderHideLabels, &QSlider::valueChanged, this, [this](int v) {
-        ui->lblHideLabelsPct->setText(QString("%1%").arg(v));
-        if (ui->chkHideLabels->isChecked())
-            m_circleWidget->setHideLabelsPct(v);
-    });
-
-    auto applyScoreRules = [this]() {
-        m_engine->setScoreRules(
-            ui->spinCooperateRwd->value(),
-            ui->spinCheatRwd->value(),
-            ui->spinBetrayedPnl->value(),
-            ui->spinBothCheat->value());
-        updateHelpText();
-    };
-    connect(ui->spinCooperateRwd, &NumberPicker::valueChanged, this, applyScoreRules);
-    connect(ui->spinCheatRwd,     &NumberPicker::valueChanged, this, applyScoreRules);
-    connect(ui->spinBetrayedPnl,  &NumberPicker::valueChanged, this, applyScoreRules);
-    connect(ui->spinBothCheat,    &NumberPicker::valueChanged, this, applyScoreRules);
-}
-
-// ============ 设置页按钮 ============
-
-void Gambling::on_btnCheatPanel_clicked()
-{
-    int idx = ui->comboCheatNpc->currentIndex();
-    if (idx < 0 || idx >= static_cast<int>(m_engine->npcs().size())) return;
-    int score = ui->spinCheatScore->value();
-    QVector<QPair<int, int>> updates;
-    updates.append({idx, score});
-    m_engine->setNPCScores(updates);
+    updateCheatCombo();
 }
 
 // ============ 自动演化信号 ============
 
-void Gambling::onAutoEvoStep(int round, int totalRounds, const QVector<NPCScoreInfo>& rankings)
+void Gambling::onAutoEvoStep(int round, int totalRounds,
+                              const QVector<NPCScoreInfo>& rankings)
 {
     m_circleWidget->setNPCData(rankings);
     m_circleWidget->setRoundInfo(round, totalRounds);
     ui->lblGameInfo->setPlainText(QString("演化 %1 / %2 回合").arg(round).arg(totalRounds));
-
-    ui->comboCheatNpc->clear();
-    for (const auto& n : m_engine->npcs()) {
-        ui->comboCheatNpc->addItem(QString("%1 [%2]").arg(n->getName()).arg(n->getStrategyType()));
-    }
+    updateCheatCombo();
 }
 
 void Gambling::onAutoEvoFinished(const QVector<NPCScoreInfo>& finalRankings)
@@ -746,34 +629,19 @@ void Gambling::onAutoEvoFinished(const QVector<NPCScoreInfo>& finalRankings)
         r += QString("%1：%2人\n").arg(it.key()).arg(it.value());
     ui->lblGameInfo->setPlainText(r);
 
-    ui->spinHonestCount->setEnabled(true);
-    ui->spinDeceptiveCount->setEnabled(true);
-    ui->spinSwingerCount->setEnabled(true);
-    ui->spinRepeaterCount->setEnabled(true);
-    ui->spinReinforceCount->setEnabled(true);
-    ui->spinForgivingCount->setEnabled(true);
-    ui->spinGrudgerCount->setEnabled(true);
-    ui->spinDetectiveCount->setEnabled(true);
-    ui->spinPavlovCount->setEnabled(true);
-    ui->spinMajorityCount->setEnabled(true);
-    ui->spinPeriodicCount->setEnabled(true);
-
+    m_spinController->setAllEnabled(true);
     ui->btnEvoStart->setEnabled(true);
-    ui->btnEvoStart->setText("开始");
+    setEvoBtnState(EVO_IDLE);
     ui->btnEvoFast->setEnabled(true);
     ui->btnEvoStep->setEnabled(true);
 
-    ui->comboCheatNpc->clear();
-    for (const auto& n : m_engine->npcs()) {
-        ui->comboCheatNpc->addItem(QString("%1 [%2]").arg(n->getName()).arg(n->getStrategyType()));
-    }
+    updateCheatCombo();
 }
 
 // ============ UI 辅助 ============
 
 void Gambling::setPlayerMode(bool playerMode)
 {
-    // 切换玩家游戏 vs 自动演化界面
     ui->lblEvoTitle->setVisible(!playerMode);
     ui->spinAutoEvo->setVisible(!playerMode);
     ui->btnEvoStart->setVisible(!playerMode);
@@ -804,7 +672,8 @@ void Gambling::updateScoreDisplay()
         .arg(m_engine->playerScore()));
 }
 
-void Gambling::updateOpponentDisplay(const QString& name, const QString& strategy, int opponentId)
+void Gambling::updateOpponentDisplay(const QString& name, const QString& strategy,
+                                      int opponentId)
 {
     if (name.isEmpty() && strategy.isEmpty())
         ui->lblOpponent->setText("对手：等待开始");
@@ -833,63 +702,44 @@ void Gambling::resetStats()
     m_stats = PlayerStats{};
 }
 
-// ============ 帮助页动态生成 ============
+void Gambling::updateCheatCombo()
+{
+    ui->comboCheatNpc->clear();
+    for (const auto& n : m_engine->npcs()) {
+        ui->comboCheatNpc->addItem(
+            QString("%1 [%2]").arg(n->getName()).arg(n->getStrategyType()));
+    }
+}
+
+// ============ 作弊 ============
+
+void Gambling::on_btnCheatPanel_clicked()
+{
+    int idx = ui->comboCheatNpc->currentIndex();
+    if (idx < 0 || idx >= static_cast<int>(m_engine->npcs().size())) return;
+    QVector<QPair<int, int>> updates;
+    updates.append({idx, ui->spinCheatScore->value()});
+    m_engine->setNPCScores(updates);
+}
+
+// ============ 帮助页 ============
 
 void Gambling::updateHelpText()
 {
-    int R = ui->spinCooperateRwd->value();
-    int T = ui->spinCheatRwd->value();
-    int S = ui->spinBetrayedPnl->value();
-    int P = ui->spinBothCheat->value();
-    int elimInt = ui->spinElimination->value();
-    int elimCnt = ui->spinElimCount->value();
-    int inheritPct = ui->sliderScoreInherit->value();
     int errorPct = ui->sliderErrorRate->value();
-    int evoRounds = ui->spinAutoEvo->value();
+    int inheritPct = ui->sliderScoreInherit->value();
     bool inherit = ui->chkInheritHistory->isChecked();
+    int evoRounds = ui->spinAutoEvo->value();
 
-    QString html;
-    html += "<h3 style='margin-top:14px; margin-bottom:12px;'><span style='font-size:large; font-weight:700;'>游戏帮助</span></h3>";
-
-    // 积分规则
-    html += "<p style='margin-top:12px;'>当前积分规则（R=" + QString::number(R)
-         + ", T=" + QString::number(T) + ", S=" + QString::number(S)
-         + ", P=" + QString::number(P) + "）：</p>";
-    html += "<ul style='margin-top:0px;'>";
-    html += "<li><b>双方合作</b>：各得 <b style='color:#2E7D32;'>" + QString::number(R) + " 分</b></li>";
-    html += "<li><b>一方背叛、一方合作</b>：背叛方得 <b style='color:#2E7D32;'>" + QString::number(T) + " 分</b>，合作方得 <b style='color:#C62828;'>" + QString::number(S) + " 分</b></li>";
-    html += "<li><b>双方背叛</b>：各得 <b style='color:#C62828;'>" + QString::number(P) + " 分</b></li>";
-    html += "</ul>";
-
-    // NPC策略
-    html += "<h4 style='margin-top:14px;'><span style='font-size:medium; font-weight:700;'>11种NPC策略</span></h4>";
-    html += "<ul style='margin-top:0px;'>";
-    html += "<li><b>诚实者</b>：始终合作，最容易被背叛者剥削</li>";
-    html += "<li><b>背叛者</b>：始终欺骗，短期收益高但长期被孤立</li>";
-    html += "<li><b>摇摆者</b>：完全随机，不可预测</li>";
-    html += "<li><b>复读者</b>：以牙还牙，复制你上一轮的行为</li>";
-    html += "<li><b>宽恕者</b>：连续两次被背叛才会报复，宽容单次错误</li>";
-    html += "<li><b>强化学习者</b>：根据历史收益选择最优策略</li>";
-    html += "<li><b>记仇者</b>：一旦被背叛则永不原谅该对手</li>";
-    html += "<li><b>试探者</b>：前4轮试探，对手有背叛则转TFT，否则一直背叛</li>";
-    html += "<li><b>趋利者</b>：上一轮双方同则合作，异则背叛</li>";
-    html += "<li><b>从众者</b>：统计对手历史，跟随多数行为</li>";
-    html += "<li><b>周期者</b>：固定循环合作→背叛→背叛→合作</li>";
-    html += "</ul>";
-
-    // 当前设置
-    html += "<h4 style='margin-top:14px;'><span style='font-size:medium; font-weight:700;'>当前设置</span></h4>";
-    html += "<ul style='margin-top:0px;'>";
-    html += "<li><b>资产继承</b>：" + QString::number(inheritPct) + "%（每轮后积分按此比例折算）</li>";
-    html += "<li><b>失误率</b>：" + QString::number(errorPct) + "%</li>";
-    html += "<li><b>淘汰</b>：每 " + QString::number(elimInt) + " 轮淘汰 " + QString::number(elimCnt) + " 人</li>";
-    html += "<li><b>继承历史</b>：" + QString(inherit ? "启用" : "禁用") + "</li>";
-    html += "<li><b>自动演化</b>：默认 " + QString::number(evoRounds) + " 回合</li>";
-    html += "</ul>";
-
+    QString html = HelpTextBuilder::build(
+        m_engine->payoff(), m_engine->eliminator(),
+        m_engine->currentRound(), m_engine->totalRounds(),
+        errorPct, inheritPct, inherit, evoRounds, m_isEnglish);
 
     ui->textHelp->setHtml(html);
 }
+
+// ============ 统计报告 ============
 
 QString Gambling::buildStatsReport(int finalScore) const
 {
@@ -907,9 +757,50 @@ QString Gambling::buildStatsReport(int finalScore) const
         for (auto it = m_stats.scoreVsStrategy.begin(); it != m_stats.scoreVsStrategy.end(); ++it) {
             int cnt = m_stats.interactionsVsStrategy.value(it.key(), 0);
             double avg = cnt > 0 ? static_cast<double>(it.value()) / cnt : 0;
-            r += QString("<li>%1：%2 次，平均 %3 分/次</li>").arg(it.key()).arg(cnt).arg(avg, 0, 'f', 1);
+            r += QString("<li>%1：%2 次，平均 %3 分/次</li>")
+                .arg(it.key()).arg(cnt).arg(avg, 0, 'f', 1);
         }
         r += "</ul>";
     }
     return r;
+}
+
+// ============ 语言切换 ============
+
+void Gambling::onLanguageChanged(int index)
+{
+    qApp->removeTranslator(&m_translator);
+
+    if (index == 0) {
+        // 中文：卸载翻译即为中文原文
+        m_isEnglish = false;
+    } else {
+        // 英文：加载翻译文件
+        if (m_translator.load(":/i18n/Gambling_en.qm")) {
+            qApp->installTranslator(&m_translator);
+        }
+        m_isEnglish = true;
+    }
+
+    // 刷新 UI 文本
+    ui->retranslateUi(this);
+    if (m_welcomeUi) m_welcomeUi->retranslateUi(m_welcomePage);
+    auto* comboLang = m_welcomePage->findChild<QComboBox*>("comboLanguage");
+    if (comboLang) comboLang->blockSignals(true);
+    m_circleWidget->setEnglish(m_isEnglish);
+    m_circleWidget->retranslateUi();
+    setEvoBtnState(m_evoBtnState);  // 恢复演化按钮状态（retranslateUi 会覆盖）
+    setupTooltips();
+    updateHelpText();
+    if (comboLang) comboLang->blockSignals(false);
+}
+
+void Gambling::setEvoBtnState(EvoBtnState state)
+{
+    m_evoBtnState = state;
+    switch (state) {
+    case EVO_IDLE:    ui->btnEvoStart->setText(tr("开始")); break;
+    case EVO_RUNNING: ui->btnEvoStart->setText(tr("暂停")); break;
+    case EVO_PAUSED:  ui->btnEvoStart->setText(tr("继续")); break;
+    }
 }

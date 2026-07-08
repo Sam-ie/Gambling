@@ -1,53 +1,41 @@
 #include "gameengine.h"
 #include <algorithm>
-#include <numeric>
-#include <cstdlib>
-#include <ctime>
-#include <random>
-#include <limits>
 #include <QDebug>
 
 GameEngine::GameEngine(QObject* parent)
     : QObject(parent)
+    , m_evoEngine(this)
 {
-    std::srand(static_cast<unsigned>(std::time(nullptr)));
-}
+    // 将子模块指针绑定到演化引擎
+    m_evoEngine.bind(&m_npcs, &m_npcTypes, &m_history,
+                     &m_runner, &m_payoff, &m_eliminator, &m_nextNpcId);
 
-GameEngine::~GameEngine() = default;
+    // 转发演化引擎信号
+    connect(&m_evoEngine, &AutoEvolutionEngine::step,
+            this, &GameEngine::autoEvoStep);
+    connect(&m_evoEngine, &AutoEvolutionEngine::pairDone,
+            this, &GameEngine::autoEvoPairDone);
+    connect(&m_evoEngine, &AutoEvolutionEngine::finished,
+            this, &GameEngine::autoEvoFinished);
+}
 
 // ============ 初始化 ============
 
-void GameEngine::initializeNPCs(int honestCount, int deceptiveCount,
-                                int swingerCount, int repeaterCount,
-                                int forgivingCount, int reinforcementCount,
-                                int grudgerCount, int detectiveCount,
-                                int pavlovCount, int majorityCount,
-                                int periodicCount)
+void GameEngine::initializeNPCs(const NPCConfig& config)
 {
     m_npcs.clear();
     m_npcTypes.clear();
     m_nextNpcId = 0;
 
-    auto createBatch = [&](NPCFactory::NPCType type, int count, const QString& prefix) {
+    config.forEach([this](NPCFactory::NPCType type, int count) {
+        QString prefix = NPCFactory::defaultPrefix(type);
         for (int i = 0; i < count; ++i) {
-            m_npcs.push_back(std::unique_ptr<NPCBase>(
-                NPCFactory::createNPC(type, m_nextNpcId++, prefix + "-" + QString::number(i + 1))));
+            m_npcs.push_back(NPCFactory::create(type, m_nextNpcId++,
+                prefix + "-" + QString::number(i + 1)));
             m_npcTypes.push_back(type);
         }
-    };
-
-    createBatch(NPCFactory::HONEST,        honestCount,      "诚实者");
-    createBatch(NPCFactory::DECEPTIVE,     deceptiveCount,   "背叛者");
-    createBatch(NPCFactory::SWINGER,       swingerCount,     "摇摆者");
-    createBatch(NPCFactory::REPEATER,      repeaterCount,    "复读者");
-    createBatch(NPCFactory::FORGIVING,     forgivingCount,   "宽恕者");
-    createBatch(NPCFactory::REINFORCEMENT, reinforcementCount, "强化学习");
-    createBatch(NPCFactory::GRUDGER,       grudgerCount,     "记仇者");
-    createBatch(NPCFactory::DETECTIVE,     detectiveCount,   "试探者");
-    createBatch(NPCFactory::PAVLOV,        pavlovCount,      "趋利者");
-    createBatch(NPCFactory::MAJORITY,      majorityCount,    "从众者");
-    createBatch(NPCFactory::PERIODIC,      periodicCount,    "周期者");
-    m_nextNpcId++; // 为玩家位留空，避免 NPC 克隆 ID 冲突
+    });
+    m_nextNpcId++; // 为玩家位预留
 }
 
 // ============ 游戏控制 ============
@@ -61,11 +49,8 @@ void GameEngine::startGame(int totalRounds)
     m_playerScore = 0;
     m_currentOpponentIdx = 0;
 
-    for (auto& npc : m_npcs) {
-        npc->resetScore();
-    }
+    for (auto& npc : m_npcs) npc->resetScore();
 
-    // 历史记录: npcCount 个 NPC + 1 个玩家槽位
     int playerSlot = static_cast<int>(m_npcs.size());
     m_history.ensureSize(playerSlot + 1);
 
@@ -91,37 +76,11 @@ void GameEngine::resetGame()
 
 void GameEngine::runNPCRound()
 {
-    int n = static_cast<int>(m_npcs.size());
-    bool hasError = (m_errorRate > 0.0);
-    double errorThreshold = m_errorRate * RAND_MAX;
-
-    for (int i = 0; i < n; ++i) {
-        for (int j = i + 1; j < n; ++j) {
-            int actionI = m_npcs[i]->action(m_npcs[j]->getId(), m_history);
-            int actionJ = m_npcs[j]->action(m_npcs[i]->getId(), m_history);
-
-            // 失误率：NPC 有一定概率随机选择
-            if (hasError && std::rand() < errorThreshold) actionI = std::rand() % 2;
-            if (hasError && std::rand() < errorThreshold) actionJ = std::rand() % 2;
-
-            m_history.recordInteraction(m_npcs[i]->getId(), m_npcs[j]->getId(),
-                                        actionI, actionJ);
-
-            int scoreI, scoreJ;
-            calculateScores(actionI, actionJ, scoreI, scoreJ);
-            m_npcs[i]->addScore(scoreI);
-            m_npcs[j]->addScore(scoreJ);
-
-            // 强化学习 NPC 更新
-            m_npcs[i]->postRoundUpdate(m_npcs[j]->getId(), actionJ, actionI, scoreI);
-            m_npcs[j]->postRoundUpdate(m_npcs[i]->getId(), actionI, actionJ, scoreJ);
-        }
-    }
+    m_runner.runAllPairs(m_npcs, m_history, m_payoff);
 
     emit npcInteractionsComplete();
     emit allScoresUpdated(buildRankings());
 
-    // 进入玩家回合
     m_currentOpponentIdx = 0;
     m_phase = WAITING_FOR_PLAYER;
     advanceTurn();
@@ -137,25 +96,13 @@ void GameEngine::playerAction(int action)
     int playerIdx = static_cast<int>(m_npcs.size());
     auto& npc = m_npcs[m_currentOpponentIdx];
 
-    int npcAction = npc->action(playerIdx, m_history);
-
-    // 失误率：对手 NPC 有概率随机选择（玩家不受影响）
-    if (m_errorRate > 0.0 && std::rand() < m_errorRate * RAND_MAX) {
-        npcAction = std::rand() % 2;
-    }
-
-    m_history.recordInteraction(playerIdx, npc->getId(), action, npcAction);
-
-    int playerScoreChange, npcScoreChange;
-    calculateScores(action, npcAction, playerScoreChange, npcScoreChange);
-    m_playerScore += playerScoreChange;
-    npc->addScore(npcScoreChange);
-
-    npc->postRoundUpdate(playerIdx, action, npcAction, npcScoreChange);
+    auto result = m_runner.playerVsNpc(action, *npc, playerIdx,
+                                        m_history, m_payoff);
+    m_playerScore += result.scoreA;
 
     emit turnResult(npc->getId(), npc->getName(),
-                    action, npcAction,
-                    playerScoreChange, npcScoreChange);
+                    action, result.actionB,
+                    result.scoreA, result.scoreB);
     emit allScoresUpdated(buildRankings());
 
     m_currentOpponentIdx++;
@@ -172,7 +119,7 @@ void GameEngine::advanceTurn()
         return;
     }
 
-    // 所有对手交互完毕，推进回合
+    // 所有对手交互完毕
     m_currentRound++;
     if (m_currentRound >= m_totalRounds) {
         m_phase = FINISHED;
@@ -181,34 +128,46 @@ void GameEngine::advanceTurn()
         return;
     }
 
-    // 回合结束：淘汰 + 积分折算（玩家也参与）
-    if (m_eliminationInterval > 0 && m_currentRound % m_eliminationInterval == 0) {
-        applyElimination();
-        adjustScores();
-        m_playerScore = static_cast<int>(static_cast<double>(m_playerScore) * m_scoreInheritRatio);
-    }
+    applyEliminationIfDue();
 
     emit roundChanged(m_currentRound + 1, m_totalRounds);
     m_phase = NPC_INTERACTION;
     runNPCRound();
 }
 
-// ============ 辅助方法 ============
-
-void GameEngine::calculateScores(int action1, int action2,
-                                  int& score1, int& score2)
+void GameEngine::applyEliminationIfDue()
 {
-    // 使用成员变量，可配置的支付矩阵
-    if (action1 == 0 && action2 == 0) {
-        score1 = m_cooperateReward; score2 = m_cooperateReward;
-    } else if (action1 == 0 && action2 == 1) {
-        score1 = m_betrayedPenalty; score2 = m_cheatReward;
-    } else if (action1 == 1 && action2 == 0) {
-        score1 = m_cheatReward; score2 = m_betrayedPenalty;
-    } else {
-        score1 = m_bothCheatPenalty; score2 = m_bothCheatPenalty;
+    if (m_eliminator.shouldEliminate(m_currentRound)) {
+        m_eliminator.apply(m_npcs, m_npcTypes, m_nextNpcId, m_history);
+        m_eliminator.adjustScores(m_npcs, nullptr);
+        m_playerScore = m_eliminator.adjustPlayerScore(m_playerScore);
     }
 }
+
+// ============ 配置 ============
+
+void GameEngine::setErrorRate(double rate)
+{
+    m_runner.setErrorRate(rate);
+    m_evoEngine.setErrorRate(rate);
+}
+
+void GameEngine::setScoreInheritRatio(int pct)
+{
+    m_eliminator.setScoreInheritRatio(pct / 100.0);
+}
+
+int GameEngine::scoreInheritRatio() const
+{
+    return static_cast<int>(m_eliminator.scoreInheritRatio() * 100);
+}
+
+void GameEngine::setAutoEvolutionSpeed(int ms)
+{
+    m_evoEngine.setAutoEvoInterval(ms);
+}
+
+// ============ 查询 ============
 
 QVector<NPCScoreInfo> GameEngine::buildRankings() const
 {
@@ -239,380 +198,38 @@ void GameEngine::cheatAddScore(int points)
     emit allScoresUpdated(buildRankings());
 }
 
-void GameEngine::setNPCScores(const QVector<QPair<int, int>>& npcScoreUpdates)
+void GameEngine::setNPCScores(const QVector<QPair<int, int>>& updates)
 {
-    for (const auto& upd : npcScoreUpdates) {
+    for (const auto& upd : updates) {
         int idx = upd.first;
-        int score = upd.second;
         if (idx >= 0 && idx < static_cast<int>(m_npcs.size())) {
-            m_npcs[idx]->setScore(score);
+            m_npcs[idx]->setScore(upd.second);
         }
     }
     emit allScoresUpdated(buildRankings());
 }
 
-// ============ 淘汰机制 ============
+// ============ 自动演化委托 ============
 
-void GameEngine::applyElimination()
+void GameEngine::startAutoEvolution(int totalRounds, bool startTimer)
 {
-    int n = static_cast<int>(m_npcs.size());
-    if (n < 2) return;
+    if (m_npcs.empty()) return;
 
-    int eliminateCount = qMin(m_eliminationCount, n - 1);
-    if (eliminateCount <= 0) return;
+    m_totalRounds = totalRounds;
+    m_currentRound = 0;
+    m_playerScore = 0;
 
-    // 找最高分（随机打破平局）
-    int maxScore = std::numeric_limits<int>::min();
-    for (auto& npc : m_npcs) maxScore = qMax(maxScore, npc->getScore());
-    QVector<int> bestPool;
-    for (int i = 0; i < n; ++i)
-        if (m_npcs[i]->getScore() == maxScore) bestPool.append(i);
-    int bestIdx = bestPool[std::rand() % bestPool.size()];
-    NPCFactory::NPCType bestType = m_npcTypes[bestIdx];
-    int parentScore = m_npcs[bestIdx]->getScore();
-
-    // 找最低分淘汰对象（随机打破平局）
-    QVector<int> sortedByScore(n);
-    std::iota(sortedByScore.begin(), sortedByScore.end(), 0);
-    std::sort(sortedByScore.begin(), sortedByScore.end(), [this](int a, int b) {
-        return m_npcs[a]->getScore() < m_npcs[b]->getScore();
-    });
-
-    QSet<int> eliminated;
-    for (int k = 0; k < eliminateCount; ++k) {
-        // 收集所有未被淘汰的当前最低分者
-        int curMinScore = std::numeric_limits<int>::max();
-        for (int i = 0; i < n; ++i) {
-            if (eliminated.contains(i)) continue;
-            curMinScore = qMin(curMinScore, m_npcs[i]->getScore());
-        }
-        QVector<int> pool;
-        for (int i = 0; i < n; ++i) {
-            if (eliminated.contains(i)) continue;
-            if (m_npcs[i]->getScore() == curMinScore) pool.append(i);
-        }
-        int worstIdx = pool[std::rand() % pool.size()];
-        eliminated.insert(worstIdx);
-
-        if (curMinScore >= parentScore) break; // 全部分数相同，停止
-
-        // 克隆最高分 NPC
-        int oldId = m_npcs[worstIdx]->getId(); // 记录被替换 NPC 的 ID
-        int newId = m_nextNpcId++;
-        QString newName = NPCFactory::getTypeName(bestType)
-                        + QString("-c%1").arg(newId);
-        m_npcs[worstIdx] = std::unique_ptr<NPCBase>(
-            NPCFactory::createNPC(bestType, newId, newName));
-        m_npcs[worstIdx]->setScore(parentScore);
-        m_npcTypes[worstIdx] = bestType;
-
-        // 继承历史记录
-        if (m_inheritHistory) {
-            m_history.copyHistory(oldId, newId);
-        }
-    }
-
-    qDebug() << "淘汰: 删除了" << eliminated.size() << "个最低分NPC, 替换为"
-             << NPCFactory::getTypeName(bestType);
-}
-
-void GameEngine::startAutoEvolution(int totalRounds, int honestCount,
-                                     int deceptiveCount, int swingerCount,
-                                     int repeaterCount, int forgivingCount,
-                                     int reinforcementCount,
-                                     int grudgerCount, int detectiveCount,
-                                     int pavlovCount, int majorityCount,
-                                     int periodicCount, bool startTimer)
-{
-    stopAutoEvolution();
-
-    // 初始化 NPC（无玩家参与）
-    initializeNPCs(honestCount, deceptiveCount, swingerCount,
-                    repeaterCount, forgivingCount, reinforcementCount,
-                    grudgerCount, detectiveCount, pavlovCount,
-                    majorityCount, periodicCount);
-
-    for (auto& npc : m_npcs) {
-        npc->resetScore();
-    }
-
+    for (auto& npc : m_npcs) npc->resetScore();
     m_history.ensureSize(static_cast<int>(m_npcs.size()));
     m_history.clear();
 
-    m_currentRound = 0;
-    m_autoEvoTargetRound = totalRounds;
-    m_autoEvoPairI = 0;
-    m_autoEvoPairJ = 1;
-    m_autoEvoAdjustingRound = false;
-    m_autoEvoWaitingAdjust = false;
-    m_autoEvoFastMode = false;
-    m_autoEvoSingleRound = false;
-    m_playerScore = 0;
-
-    // 创建定时器
-    m_autoEvoTimer = new QTimer(this);
-    connect(m_autoEvoTimer, &QTimer::timeout, this, &GameEngine::autoEvoTick);
-    if (startTimer) {
-        m_autoEvoTimer->start(m_autoEvoInterval);
-    } else {
-        m_autoEvoPaused = true;
-    }
-
-    emit autoEvoStep(0, totalRounds, buildRankings());
-}
-
-void GameEngine::stopAutoEvolution()
-{
-    if (m_autoEvoTimer) {
-        m_autoEvoTimer->stop();
-        delete m_autoEvoTimer;
-        m_autoEvoTimer = nullptr;
-    }
-    m_autoEvoPaused = false;
-}
-
-void GameEngine::pauseAutoEvolution()
-{
-    if (m_autoEvoTimer && m_autoEvoTimer->isActive()) {
-        m_autoEvoTimer->stop();
-        m_autoEvoPaused = true;
-    }
-}
-
-void GameEngine::resumeAutoEvolution()
-{
-    if (m_autoEvoPaused && m_autoEvoTimer) {
-        m_autoEvoPaused = false;
-        m_autoEvoTimer->start(m_autoEvoInterval);
-    } else {
-        m_autoEvoPaused = true;
-    }
+    m_evoEngine.start(totalRounds, startTimer);
 }
 
 void GameEngine::startAutoEvolutionFast()
 {
-    m_autoEvoFastMode = true;
-    m_autoEvoSingleRound = false;
-    m_autoEvoTimer->setInterval(100);
-    m_autoEvoTimer->start(100);
-}
-
-void GameEngine::stepAutoEvolution()
-{
-    // 单轮：逐对回显，定时器驱动一轮后自动停止
-    if (!m_autoEvoTimer) return;
-    if (m_currentRound >= m_autoEvoTargetRound) return;
-    m_autoEvoFastMode = false;
-    m_autoEvoSingleRound = true;
-    m_autoEvoPaused = true;
-    m_autoEvoTimer->setInterval(100);
-    m_autoEvoTimer->start(100);
-}
-
-void GameEngine::stepAutoEvolutionPair()
-{
-    if (m_currentRound >= m_autoEvoTargetRound) return;
-
-    int n = static_cast<int>(m_npcs.size());
-    if (n < 2) return;
-
-    // 步骤 A: 淘汰+折算步（仅淘汰回合触发）
-    if (m_autoEvoAdjustingRound) {
-        m_autoEvoAdjustingRound = false;
-        m_currentRound++;
-        if (m_currentRound >= m_autoEvoTargetRound) {
-            emit autoEvoFinished(buildRankings());
-            return;
-        }
-        applyElimination();
-        adjustScores();
-        m_autoEvoPairI = 0;
-        m_autoEvoPairJ = 1;
-        emit autoEvoStep(m_currentRound, m_autoEvoTargetRound, buildRankings());
-        return;
+    if (!m_evoEngine.isRunning()) {
+        startAutoEvolution(m_totalRounds, true);
     }
-
-    // 步骤 B: 找下一对未交互的 (i, j)
-    while (m_autoEvoPairI < n && m_autoEvoPairJ >= n) {
-        m_autoEvoPairI++;
-        m_autoEvoPairJ = m_autoEvoPairI + 1;
-    }
-    if (m_autoEvoPairI >= n || m_autoEvoPairJ >= n) {
-        // 所有对已完成
-        bool elimDue = (m_eliminationInterval > 0 && (m_currentRound + 1) % m_eliminationInterval == 0);
-        if (elimDue) {
-            // 淘汰回合：插入折算步
-            m_autoEvoAdjustingRound = true;
-            emit autoEvoStep(m_currentRound + 1, m_autoEvoTargetRound, buildRankings());
-            emit autoEvoPairDone(-1, -1);
-        } else {
-            // 非淘汰回合：直接推进
-            m_currentRound++;
-            if (m_currentRound >= m_autoEvoTargetRound) {
-                emit autoEvoFinished(buildRankings());
-                return;
-            }
-            m_autoEvoPairI = 0;
-            m_autoEvoPairJ = 1;
-            emit autoEvoStep(m_currentRound, m_autoEvoTargetRound, buildRankings());
-        }
-        return;
-    }
-
-    int i = m_autoEvoPairI;
-    int j = m_autoEvoPairJ;
-
-    // 执行这一对
-    bool hasError = (m_errorRate > 0.0);
-    double errorThreshold = m_errorRate * RAND_MAX;
-
-    int actionI = m_npcs[i]->action(m_npcs[j]->getId(), m_history);
-    int actionJ = m_npcs[j]->action(m_npcs[i]->getId(), m_history);
-
-    if (hasError && std::rand() < errorThreshold) actionI = std::rand() % 2;
-    if (hasError && std::rand() < errorThreshold) actionJ = std::rand() % 2;
-
-    m_history.recordInteraction(m_npcs[i]->getId(), m_npcs[j]->getId(),
-                                actionI, actionJ);
-
-    int scoreI, scoreJ;
-    calculateScores(actionI, actionJ, scoreI, scoreJ);
-    m_npcs[i]->addScore(scoreI);
-    m_npcs[j]->addScore(scoreJ);
-    m_npcs[i]->postRoundUpdate(m_npcs[j]->getId(), actionJ, actionI, scoreI);
-    m_npcs[j]->postRoundUpdate(m_npcs[i]->getId(), actionI, actionJ, scoreJ);
-
-    // 推进到下一对
-    m_autoEvoPairJ++;
-    if (m_autoEvoPairJ >= n) {
-        m_autoEvoPairI++;
-        m_autoEvoPairJ = m_autoEvoPairI + 1;
-    }
-
-    emit autoEvoStep(m_currentRound + 1, m_autoEvoTargetRound, buildRankings());
-    emit autoEvoPairDone(m_npcs[i]->getId(), m_npcs[j]->getId());
-}
-
-void GameEngine::adjustScores()
-{
-    if (m_scoreInheritRatio >= 1.0) return;
-    for (auto& npc : m_npcs) {
-        int oldScore = npc->getScore();
-        int newScore = static_cast<int>(static_cast<double>(oldScore) * m_scoreInheritRatio);
-        npc->setScore(newScore);
-    }
-}
-
-void GameEngine::autoEvoTick()
-{
-    // ====== 极速演化（一轮一帧） ======
-    if (m_autoEvoFastMode) {
-        int n = static_cast<int>(m_npcs.size());
-        bool hasError = (m_errorRate > 0.0);
-        double errorThreshold = m_errorRate * RAND_MAX;
-        for (int i = 0; i < n; ++i)
-            for (int j = i + 1; j < n; ++j) {
-                int aI = m_npcs[i]->action(m_npcs[j]->getId(), m_history);
-                int aJ = m_npcs[j]->action(m_npcs[i]->getId(), m_history);
-                if (hasError && std::rand() < errorThreshold) aI = std::rand() % 2;
-                if (hasError && std::rand() < errorThreshold) aJ = std::rand() % 2;
-                m_history.recordInteraction(m_npcs[i]->getId(), m_npcs[j]->getId(), aI, aJ);
-                int sI, sJ; calculateScores(aI, aJ, sI, sJ);
-                m_npcs[i]->addScore(sI); m_npcs[j]->addScore(sJ);
-                m_npcs[i]->postRoundUpdate(m_npcs[j]->getId(), aJ, aI, sI);
-                m_npcs[j]->postRoundUpdate(m_npcs[i]->getId(), aI, aJ, sJ);
-            }
-        m_currentRound++;
-        if (m_eliminationInterval > 0 && m_currentRound % m_eliminationInterval == 0) {
-            applyElimination(); adjustScores();
-        }
-        emit autoEvoStep(m_currentRound, m_autoEvoTargetRound, buildRankings());
-        if (m_currentRound >= m_autoEvoTargetRound) {
-            stopAutoEvolution(); emit autoEvoFinished(buildRankings());
-        }
-        return;
-    }
-
-    // ====== 逐对演化（一对/tick） ======
-    // 等待折算步
-    if (m_autoEvoWaitingAdjust) {
-        adjustScores();
-        m_autoEvoWaitingAdjust = false;
-        m_autoEvoTimer->setInterval(100);
-        if (m_autoEvoSingleRound) {
-            m_autoEvoSingleRound = false;
-            m_autoEvoTimer->stop();
-            m_autoEvoPaused = true;
-        }
-        emit autoEvoStep(m_currentRound, m_autoEvoTargetRound, buildRankings());
-        return;
-    }
-
-    // 正在调整步 → 推进到下一回合
-    if (m_autoEvoAdjustingRound) {
-        m_autoEvoAdjustingRound = false;
-        m_currentRound++;
-        if (m_currentRound >= m_autoEvoTargetRound) {
-            stopAutoEvolution(); emit autoEvoFinished(buildRankings());
-            return;
-        }
-        applyElimination();
-        m_autoEvoWaitingAdjust = true;
-        m_autoEvoTimer->setInterval(400);
-        emit autoEvoStep(m_currentRound, m_autoEvoTargetRound, buildRankings());
-        emit autoEvoPairDone(-1, -1);
-        return;
-    }
-
-    int n = static_cast<int>(m_npcs.size());
-    if (n < 2) return;
-
-    // 找下一对
-    while (m_autoEvoPairI < n && m_autoEvoPairJ >= n) {
-        m_autoEvoPairI++; m_autoEvoPairJ = m_autoEvoPairI + 1;
-    }
-    if (m_autoEvoPairI >= n || m_autoEvoPairJ >= n) {
-        // 所有对完成
-        bool elimDue = (m_eliminationInterval > 0 && (m_currentRound + 1) % m_eliminationInterval == 0);
-        if (elimDue) {
-            m_autoEvoAdjustingRound = true;
-            emit autoEvoStep(m_currentRound + 1, m_autoEvoTargetRound, buildRankings());
-            emit autoEvoPairDone(-1, -1);
-        } else {
-            m_currentRound++;
-            if (m_currentRound >= m_autoEvoTargetRound) {
-                if (m_autoEvoSingleRound) m_autoEvoSingleRound = false;
-                stopAutoEvolution();
-                emit autoEvoFinished(buildRankings());
-                return;
-            }
-            if (m_autoEvoSingleRound) {
-                m_autoEvoSingleRound = false;
-                m_autoEvoTimer->stop();
-                m_autoEvoPaused = true;
-            }
-            m_autoEvoPairI = 0; m_autoEvoPairJ = 1;
-            emit autoEvoStep(m_currentRound, m_autoEvoTargetRound, buildRankings());
-        }
-        return;
-    }
-
-    int i = m_autoEvoPairI, j = m_autoEvoPairJ;
-    bool hasError = (m_errorRate > 0.0);
-    double errorThreshold = m_errorRate * RAND_MAX;
-    int aI = m_npcs[i]->action(m_npcs[j]->getId(), m_history);
-    int aJ = m_npcs[j]->action(m_npcs[i]->getId(), m_history);
-    if (hasError && std::rand() < errorThreshold) aI = std::rand() % 2;
-    if (hasError && std::rand() < errorThreshold) aJ = std::rand() % 2;
-    m_history.recordInteraction(m_npcs[i]->getId(), m_npcs[j]->getId(), aI, aJ);
-    int sI, sJ; calculateScores(aI, aJ, sI, sJ);
-    m_npcs[i]->addScore(sI); m_npcs[j]->addScore(sJ);
-    m_npcs[i]->postRoundUpdate(m_npcs[j]->getId(), aJ, aI, sI);
-    m_npcs[j]->postRoundUpdate(m_npcs[i]->getId(), aI, aJ, sJ);
-
-    m_autoEvoPairJ++;
-    if (m_autoEvoPairJ >= n) { m_autoEvoPairI++; m_autoEvoPairJ = m_autoEvoPairI + 1; }
-
-    emit autoEvoStep(m_currentRound + 1, m_autoEvoTargetRound, buildRankings());
-    emit autoEvoPairDone(m_npcs[i]->getId(), m_npcs[j]->getId());
+    m_evoEngine.fastMode();
 }
